@@ -16,12 +16,16 @@ ENV/
 
 # Project
 models/
+VibeVoice/
 *.mp3
 *.wav
 *.m4a
+*.ogg
+*.flac
 uploads/
 *.log
 
 # OS
 .DS_Store
 Thumbs.db
+.claude
