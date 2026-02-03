@@ -38,6 +38,7 @@ class AppConfig:
 
 def get_torch_dtype(dtype_str: str) -> torch.dtype:
     """Convert string dtype to torch.dtype, with auto-detection."""
+    dtype_str = dtype_str.lower()
     if dtype_str == "float32":
         return torch.float32
     elif dtype_str == "float16":
@@ -73,6 +74,9 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
 
     with open(config_path) as f:
         data = yaml.safe_load(f)
+
+    if data is None:
+        data = {}
 
     return AppConfig(
         server=ServerConfig(**data.get("server", {})),

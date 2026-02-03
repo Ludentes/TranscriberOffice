@@ -47,3 +47,30 @@ def test_config_auto_dtype_detection():
     # Auto should return a valid dtype
     auto_dtype = get_torch_dtype("auto")
     assert auto_dtype in [torch.float16, torch.bfloat16, torch.float32]
+
+
+def test_load_config_empty_file(tmp_path):
+    """Config handles empty YAML file gracefully."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("")
+
+    from app.config import load_config
+
+    config = load_config(config_file)
+
+    # Should return defaults when file is empty
+    assert config.server.host == "0.0.0.0"
+    assert config.server.port == 7860
+    assert config.model.path == "microsoft/VibeVoice-ASR"
+    assert config.transcription.max_file_size_mb == 500
+
+
+def test_get_torch_dtype_case_insensitive():
+    """get_torch_dtype handles mixed case input."""
+    from app.config import get_torch_dtype
+    import torch
+
+    assert get_torch_dtype("FLOAT32") == torch.float32
+    assert get_torch_dtype("Float16") == torch.float16
+    assert get_torch_dtype("BFLOAT16") == torch.bfloat16
+    assert get_torch_dtype("AUTO") in [torch.float16, torch.bfloat16, torch.float32]
