@@ -206,6 +206,8 @@ class TranscriptionService:
                     do_sample=False,
                     temperature=None,
                     top_p=None,
+                    eos_token_id=self.processor.tokenizer.eos_token_id,
+                    pad_token_id=getattr(self.processor, 'pad_id', self.processor.tokenizer.pad_token_id),
                 )
 
             # Decode output
@@ -315,6 +317,8 @@ class TranscriptionService:
                             do_sample=False,
                             temperature=None,
                             top_p=None,
+                            eos_token_id=self.processor.tokenizer.eos_token_id,
+                            pad_token_id=getattr(self.processor, 'pad_id', self.processor.tokenizer.pad_token_id),
                             streamer=streamer,
                         )
                 except Exception as e:
