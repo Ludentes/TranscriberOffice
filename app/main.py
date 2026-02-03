@@ -1,6 +1,7 @@
 # app/main.py
 """Main application entry point."""
 import gradio as gr
+import uvicorn
 from fastapi import FastAPI
 
 from app.api import router as api_router
@@ -28,19 +29,21 @@ def create_app() -> FastAPI:
 
 def main():
     """Run the application."""
-    import uvicorn
+    try:
+        config = get_config()
 
-    config = get_config()
+        print(f"Starting Meeting Transcriber on {config.server.host}:{config.server.port}")
+        print(f"Web UI: http://{config.server.host}:{config.server.port}/")
+        print(f"API: http://{config.server.host}:{config.server.port}/api/transcribe")
 
-    print(f"Starting Meeting Transcriber on {config.server.host}:{config.server.port}")
-    print(f"Web UI: http://{config.server.host}:{config.server.port}/")
-    print(f"API: http://{config.server.host}:{config.server.port}/api/transcribe")
-
-    uvicorn.run(
-        create_app(),
-        host=config.server.host,
-        port=config.server.port
-    )
+        uvicorn.run(
+            create_app(),
+            host=config.server.host,
+            port=config.server.port
+        )
+    except Exception as e:
+        print(f"Error starting server: {e}")
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
