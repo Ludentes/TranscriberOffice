@@ -1,51 +1,66 @@
 # app/ui.py
 """Gradio web interface for transcription."""
 import json
-from typing import Optional
+from typing import Optional, Generator
 
 import gradio as gr
 
 from app.transcribe import get_transcription_service
 
 
-def process_audio(audio_path: Optional[str], hotwords: str) -> tuple[str, str]:
-    """Process uploaded audio and return transcript.
+def process_audio_stream(audio_path: Optional[str], hotwords: str) -> Generator[tuple[str, str], None, None]:
+    """Process uploaded audio with streaming output.
 
     Args:
         audio_path: Path to uploaded audio file
         hotwords: Comma-separated hotwords
 
-    Returns:
-        Tuple of (formatted_text, json_string)
+    Yields:
+        Tuples of (formatted_text, json_string)
     """
     if not audio_path:
-        return "Please upload an audio file.", json.dumps({"success": False, "error": "No audio file uploaded"}, indent=2)
+        yield "Please upload an audio file.", json.dumps({"success": False, "error": "No audio file uploaded"}, indent=2)
+        return
 
     try:
         service = get_transcription_service()
-        result = service.transcribe(
+
+        # Use streaming transcription
+        for partial_text, final_result in service.transcribe_stream(
             audio_path=audio_path,
             hotwords=hotwords if hotwords else None
-        )
+        ):
+            if final_result is None:
+                # Still generating - show partial output
+                yield partial_text, json.dumps({"status": "generating..."}, indent=2)
+            else:
+                # Final result
+                if not final_result.success:
+                    error_msg = f"Transcription failed: {final_result.error or 'Unknown error'}"
+                    error_json = json.dumps({
+                        "success": False,
+                        "error": final_result.error,
+                        "processing_time_seconds": round(final_result.processing_time_seconds, 2)
+                    }, indent=2)
+                    yield error_msg, error_json
+                else:
+                    # Add processing time to output
+                    output_text = final_result.full_text
+                    output_text += f"\n--- Completed in {final_result.processing_time_seconds:.1f}s ---"
+
+                    json_response = {
+                        "success": True,
+                        "duration_seconds": final_result.duration_seconds,
+                        "speakers_detected": final_result.speakers_detected,
+                        "processing_time_seconds": round(final_result.processing_time_seconds, 2),
+                        "segments": final_result.segments,
+                        "full_text": final_result.full_text
+                    }
+                    yield output_text, json.dumps(json_response, indent=2)
+
     except Exception as e:
         error_msg = f"Service error: {str(e)}"
-        return error_msg, json.dumps({"success": False, "error": str(e)}, indent=2)
-
-    if not result.success:
-        error_msg = f"Transcription failed: {result.error or 'Unknown error'}"
-        error_json = json.dumps({"success": False, "error": result.error}, indent=2)
-        return error_msg, error_json
-
-    # Build JSON response
-    json_response = {
-        "success": True,
-        "duration_seconds": result.duration_seconds,
-        "speakers_detected": result.speakers_detected,
-        "segments": result.segments,
-        "full_text": result.full_text
-    }
-
-    return result.full_text, json.dumps(json_response, indent=2)
+        yield error_msg, json.dumps({"success": False, "error": str(e)}, indent=2)
 
 
 def create_ui() -> gr.Blocks:
@@ -91,9 +106,9 @@ def create_ui() -> gr.Blocks:
                 "Add relevant names and terms as hotwords."
             )
 
-        # Connect the button
+        # Connect the button with streaming
         transcribe_btn.click(
-            fn=process_audio,
+            fn=process_audio_stream,
             inputs=[audio_input, hotwords_input],
             outputs=[text_output, json_output]
         )

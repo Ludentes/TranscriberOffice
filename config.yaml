@@ -11,6 +11,8 @@ model:
   cache_dir: "./models"
   # Attention implementation: "sdpa", "eager" (flash_attention_2 requires separate install)
   attn_implementation: "sdpa"
+  # Use quantized 4-bit model: "auto" (pre-Ampere GPUs), "true", "false"
+  use_quantized: "auto"
 
 transcription:
   max_file_size_mb: 500

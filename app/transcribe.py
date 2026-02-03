@@ -1,9 +1,11 @@
 # app/transcribe.py
 """Transcription service using VibeVoice-ASR."""
 import re
+import time
+import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Generator
 
 import torch
 
@@ -16,6 +18,7 @@ class TranscriptionResult:
     full_text: str
     duration_seconds: float
     speakers_detected: int
+    processing_time_seconds: float = 0.0
     error: Optional[str] = None
 
 
@@ -176,6 +179,8 @@ class TranscriptionService:
         if not self._loaded:
             self.load_model()
 
+        start_time = time.time()
+
         try:
             # Build context info from hotwords
             context_info = None
@@ -227,24 +232,160 @@ class TranscriptionService:
             # Count unique speakers
             speakers = set(seg.get("speaker", "") for seg in segments)
 
+            processing_time = time.time() - start_time
+
             return TranscriptionResult(
                 success=True,
                 segments=segments,
                 full_text=format_transcript(segments),
                 duration_seconds=duration,
                 speakers_detected=len(speakers),
+                processing_time_seconds=processing_time,
                 error=None
             )
 
         except Exception as e:
+            processing_time = time.time() - start_time
             return TranscriptionResult(
                 success=False,
                 segments=[],
                 full_text="",
                 duration_seconds=0,
                 speakers_detected=0,
+                processing_time_seconds=processing_time,
                 error=str(e)
             )
+
+    def transcribe_stream(
+        self,
+        audio_path: str,
+        hotwords: Optional[str] = None,
+        max_new_tokens: int = 8192
+    ) -> Generator[tuple[str, Optional[TranscriptionResult]], None, None]:
+        """Transcribe an audio file with streaming output.
+
+        Args:
+            audio_path: Path to audio file (MP3, WAV, etc.)
+            hotwords: Optional comma-separated hotwords for better recognition
+            max_new_tokens: Maximum tokens to generate
+
+        Yields:
+            Tuples of (partial_text, final_result) where final_result is None until complete
+        """
+        if not self._loaded:
+            self.load_model()
+
+        start_time = time.time()
+
+        try:
+            from transformers import TextIteratorStreamer
+
+            # Build context info from hotwords
+            context_info = None
+            if hotwords:
+                terms = [h.strip() for h in hotwords.split(",") if h.strip()]
+                if terms:
+                    context_info = f"Key terms: {', '.join(terms)}"
+
+            # Process audio
+            inputs = self.processor(
+                audio=audio_path,
+                return_tensors="pt",
+                add_generation_prompt=True,
+                context_info=context_info
+            )
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+
+            # Create streamer
+            streamer = TextIteratorStreamer(
+                self.processor.tokenizer,
+                skip_prompt=True,
+                skip_special_tokens=True
+            )
+
+            # Container for result from thread
+            result_container = {"text": "", "error": None}
+
+            def generate_thread():
+                try:
+                    with torch.no_grad():
+                        self.model.generate(
+                            **inputs,
+                            max_new_tokens=max_new_tokens,
+                            do_sample=False,
+                            temperature=None,
+                            top_p=None,
+                            streamer=streamer,
+                        )
+                except Exception as e:
+                    result_container["error"] = str(e)
+
+            # Start generation in background thread
+            thread = threading.Thread(target=generate_thread)
+            thread.start()
+
+            # Stream output
+            generated_text = ""
+            token_count = 0
+            for new_text in streamer:
+                generated_text += new_text
+                token_count += 1
+                elapsed = time.time() - start_time
+                status = f"--- Generating ({token_count} tokens, {elapsed:.1f}s) ---\n{generated_text}"
+                yield status, None
+
+            thread.join()
+
+            if result_container["error"]:
+                raise Exception(result_container["error"])
+
+            # Get full output with special tokens for parsing
+            full_output = self.processor.decode(
+                self.processor.tokenizer.encode(generated_text),
+                skip_special_tokens=False
+            )
+
+            # Parse segments
+            try:
+                segments = self.processor.post_process_transcription(full_output)
+                if not (segments and isinstance(segments[0], dict)):
+                    segments = parse_model_output(generated_text)
+            except (AttributeError, TypeError, ValueError):
+                segments = parse_model_output(generated_text)
+
+            # Get audio duration
+            import librosa
+            duration = librosa.get_duration(path=audio_path)
+
+            # Count unique speakers
+            speakers = set(seg.get("speaker", "") for seg in segments)
+
+            processing_time = time.time() - start_time
+
+            result = TranscriptionResult(
+                success=True,
+                segments=segments,
+                full_text=format_transcript(segments),
+                duration_seconds=duration,
+                speakers_detected=len(speakers),
+                processing_time_seconds=processing_time,
+                error=None
+            )
+
+            yield result.full_text, result
+
+        except Exception as e:
+            processing_time = time.time() - start_time
+            result = TranscriptionResult(
+                success=False,
+                segments=[],
+                full_text="",
+                duration_seconds=0,
+                speakers_detected=0,
+                processing_time_seconds=processing_time,
+                error=str(e)
+            )
+            yield f"Error: {str(e)}", result
 
 
 # Global service instance
@@ -255,10 +396,10 @@ def get_transcription_service() -> TranscriptionService:
     """Get or create the global transcription service."""
     global _service
     if _service is None:
-        from app.config import get_config, get_torch_dtype
+        from app.config import get_config, get_torch_dtype, get_model_path
         config = get_config()
         _service = TranscriptionService(
-            model_path=config.model.path,
+            model_path=get_model_path(config.model),
             dtype=get_torch_dtype(config.model.dtype),
             cache_dir=config.model.cache_dir,
             attn_implementation=config.model.attn_implementation

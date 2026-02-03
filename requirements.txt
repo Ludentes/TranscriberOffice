@@ -1,6 +1,6 @@
 # Core
 torch>=2.0.0
-transformers>=4.51.3,<5.0.0
+transformers
 accelerate
 safetensors
 

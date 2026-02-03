@@ -20,6 +20,7 @@ class ModelConfig:
     dtype: str = "auto"
     cache_dir: str = "./models"
     attn_implementation: str = "sdpa"
+    use_quantized: str = "auto"  # "auto", "true", "false"
 
 
 @dataclass
@@ -34,6 +35,25 @@ class AppConfig:
     server: ServerConfig
     model: ModelConfig
     transcription: TranscriptionConfig
+
+
+def get_model_path(config: ModelConfig) -> str:
+    """Resolve the model path based on use_quantized setting."""
+    use_quantized = config.use_quantized.lower()
+
+    if use_quantized == "true":
+        return "scerz/VibeVoice-ASR-4bit"
+    elif use_quantized == "false":
+        return config.path
+    elif use_quantized == "auto":
+        # Auto-detect: use quantized for pre-Ampere GPUs
+        if torch.cuda.is_available():
+            capability = torch.cuda.get_device_capability()
+            if capability[0] < 8:  # Pre-Ampere
+                return "scerz/VibeVoice-ASR-4bit"
+        return config.path
+    else:
+        return config.path
 
 
 def get_torch_dtype(dtype_str: str) -> torch.dtype:

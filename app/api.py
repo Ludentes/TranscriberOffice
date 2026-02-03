@@ -25,6 +25,7 @@ class TranscriptionResponse(BaseModel):
     success: bool
     duration_seconds: float = 0
     speakers_detected: int = 0
+    processing_time_seconds: float = 0
     segments: list[TranscriptionSegment] = []
     full_text: str = ""
     error: Optional[str] = None
@@ -87,6 +88,7 @@ async def transcribe_audio(
             success=result.success,
             duration_seconds=result.duration_seconds,
             speakers_detected=result.speakers_detected,
+            processing_time_seconds=round(result.processing_time_seconds, 2),
             segments=[TranscriptionSegment(**seg) for seg in result.segments],
             full_text=result.full_text,
             error=result.error
