@@ -19,16 +19,20 @@ def process_audio(audio_path: Optional[str], hotwords: str) -> tuple[str, str]:
         Tuple of (formatted_text, json_string)
     """
     if not audio_path:
-        return "Please upload an audio file.", "{}"
+        return "Please upload an audio file.", json.dumps({"success": False, "error": "No audio file uploaded"}, indent=2)
 
-    service = get_transcription_service()
-    result = service.transcribe(
-        audio_path=audio_path,
-        hotwords=hotwords if hotwords else None
-    )
+    try:
+        service = get_transcription_service()
+        result = service.transcribe(
+            audio_path=audio_path,
+            hotwords=hotwords if hotwords else None
+        )
+    except Exception as e:
+        error_msg = f"Service error: {str(e)}"
+        return error_msg, json.dumps({"success": False, "error": str(e)}, indent=2)
 
     if not result.success:
-        error_msg = f"Transcription failed: {result.error}"
+        error_msg = f"Transcription failed: {result.error or 'Unknown error'}"
         error_json = json.dumps({"success": False, "error": result.error}, indent=2)
         return error_msg, error_json
 
