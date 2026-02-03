@@ -39,6 +39,6 @@ def test_parse_model_output():
 
     segments = parse_model_output(raw_output)
 
-    assert len(segments) >= 1
+    assert len(segments) == 2
     assert "speaker" in segments[0]
     assert "text" in segments[0]

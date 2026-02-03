@@ -217,7 +217,7 @@ class TranscriptionService:
                     pass  # Already in dict format
                 else:
                     segments = parse_model_output(generated_text)
-            except (AttributeError, Exception):
+            except (AttributeError, TypeError, ValueError):
                 segments = parse_model_output(generated_text)
 
             # Get audio duration
