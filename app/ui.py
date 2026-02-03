@@ -51,10 +51,7 @@ def process_audio(audio_path: Optional[str], hotwords: str) -> tuple[str, str]:
 def create_ui() -> gr.Blocks:
     """Create the Gradio interface."""
 
-    with gr.Blocks(
-        title="Meeting Transcriber",
-        theme=gr.themes.Soft()
-    ) as demo:
+    with gr.Blocks(title="Meeting Transcriber") as demo:
         gr.Markdown("# Meeting Transcriber")
         gr.Markdown("Upload an MP3 file to transcribe with speaker identification and timestamps.")
 
@@ -78,8 +75,7 @@ def create_ui() -> gr.Blocks:
                 with gr.Tab("Transcript"):
                     text_output = gr.Textbox(
                         label="Transcription",
-                        lines=20,
-                        show_copy_button=True
+                        lines=20
                     )
 
                 with gr.Tab("JSON"):
