@@ -1,0 +1,26 @@
+# Core
+torch>=2.0.0
+transformers>=4.51.3,<5.0.0
+accelerate
+safetensors
+
+# VibeVoice dependencies
+librosa
+scipy
+numpy
+numba>0.57.0
+llvmlite>0.40.0
+pydub
+av
+
+# Web framework
+fastapi
+uvicorn[standard]
+gradio>=4.0.0
+python-multipart
+
+# Configuration
+pyyaml
+
+# Audio processing
+ffmpeg-python

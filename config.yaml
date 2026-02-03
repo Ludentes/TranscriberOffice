@@ -1,0 +1,18 @@
+server:
+  host: "0.0.0.0"
+  port: 7860
+
+model:
+  # Options: "microsoft/VibeVoice-ASR" or "scerz/VibeVoice-ASR-4bit"
+  path: "microsoft/VibeVoice-ASR"
+  # Options: "auto", "bfloat16", "float16", "float32"
+  dtype: "auto"
+  # Local cache directory
+  cache_dir: "./models"
+  # Attention implementation: "sdpa", "eager" (flash_attention_2 requires separate install)
+  attn_implementation: "sdpa"
+
+transcription:
+  max_file_size_mb: 500
+  timeout_seconds: 1800
+  default_max_new_tokens: 8192
