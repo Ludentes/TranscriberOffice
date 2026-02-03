@@ -7,6 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
+from app.config import get_config
 from app.transcribe import get_transcription_service
 
 
@@ -58,10 +59,20 @@ async def transcribe_audio(
             error=f"File format not supported. Expected one of: {', '.join(allowed_extensions)}"
         )
 
+    # Read file content and check size
+    content = await file.read()
+    config = get_config()
+    max_size_bytes = config.transcription.max_file_size_mb * 1024 * 1024
+    if len(content) > max_size_bytes:
+        return TranscriptionResponse(
+            success=False,
+            error=f"File too large. Maximum size is {config.transcription.max_file_size_mb}MB"
+        )
+
     # Save uploaded file to temp location
+    tmp_path = None
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp:
-            content = await file.read()
             tmp.write(content)
             tmp_path = tmp.name
 
@@ -71,9 +82,6 @@ async def transcribe_audio(
             audio_path=tmp_path,
             hotwords=hotwords
         )
-
-        # Clean up temp file
-        Path(tmp_path).unlink(missing_ok=True)
 
         return TranscriptionResponse(
             success=result.success,
@@ -89,6 +97,9 @@ async def transcribe_audio(
             success=False,
             error=f"Transcription failed: {str(e)}"
         )
+    finally:
+        if tmp_path:
+            Path(tmp_path).unlink(missing_ok=True)
 
 
 @router.get("/health")
