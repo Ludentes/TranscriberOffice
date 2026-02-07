@@ -115,16 +115,12 @@ class TranscriptionService:
     def load_model(self) -> None:
         """Load the VibeVoice-ASR model."""
         # Detect model path change
-        if self._loaded and hasattr(self, 'current_model_path'):
-            if self.current_model_path != self.model_path:
-                print(f"Switching model: {self.current_model_path} -> {self.model_path}")
-                self.unload_model()
+        if self._loaded and self.current_model_path != self.model_path:
+            print(f"Switching model: {self.current_model_path} -> {self.model_path}")
+            self.unload_model()
 
         if self._loaded:
             return
-
-        # Import here to avoid loading at module import time
-        from transformers import AutoProcessor, AutoModelForCausalLM
 
         print(f"Loading model: {self.model_path}")
         print(f"Device: {self.device}, dtype: {self.dtype}")
