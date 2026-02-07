@@ -116,13 +116,10 @@ class TranscriptionService:
         if self._loaded:
             return
 
-        # Import here to avoid loading at module import time
-        from transformers import AutoProcessor, AutoModelForCausalLM
-
         print(f"Loading model: {self.model_path}")
         print(f"Device: {self.device}, dtype: {self.dtype}")
 
-        # Try VibeVoice-specific imports first, fall back to auto
+        # Load VibeVoice-specific model and processor
         try:
             from vibevoice.processor.vibevoice_asr_processor import VibeVoiceASRProcessor
             from vibevoice.modular.modeling_vibevoice_asr import VibeVoiceASRForConditionalGeneration
@@ -139,20 +136,11 @@ class TranscriptionService:
                 attn_implementation=self.attn_implementation,
                 trust_remote_code=True
             )
-        except ImportError:
-            # Fallback to AutoModel with trust_remote_code
-            print("VibeVoice package not found, using AutoModel with trust_remote_code")
-            self.processor = AutoProcessor.from_pretrained(
-                self.model_path,
-                cache_dir=self.cache_dir,
-                trust_remote_code=True
-            )
-            self.model = AutoModelForCausalLM.from_pretrained(
-                self.model_path,
-                torch_dtype=self.dtype,
-                cache_dir=self.cache_dir,
-                attn_implementation=self.attn_implementation,
-                trust_remote_code=True
+        except ImportError as e:
+            raise ImportError(
+                f"VibeVoice package not installed.\n"
+                f"Please run: ./install.sh (Linux/Mac) or .\\install.ps1 (Windows)\n"
+                f"Error: {e}"
             )
 
         self.model = self.model.to(self.device)

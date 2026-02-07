@@ -42,3 +42,27 @@ def test_parse_model_output():
     assert len(segments) == 2
     assert "speaker" in segments[0]
     assert "text" in segments[0]
+
+
+def test_vibevoice_import_error_message():
+    """Verify clear error message when VibeVoice not installed."""
+    import builtins
+    from unittest.mock import patch
+    from app.transcribe import TranscriptionService
+
+    service = TranscriptionService()
+
+    # Mock the vibevoice module imports to fail
+    original_import = builtins.__import__
+
+    def mock_import(name, *args, **kwargs):
+        if 'vibevoice' in name:
+            raise ImportError(f"No module named '{name}'")
+        return original_import(name, *args, **kwargs)
+
+    with patch('builtins.__import__', side_effect=mock_import):
+        with pytest.raises(ImportError) as exc_info:
+            service.load_model()
+
+        assert "VibeVoice package not installed" in str(exc_info.value)
+        assert "./install.sh" in str(exc_info.value)
