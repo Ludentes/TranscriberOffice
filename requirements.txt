@@ -3,6 +3,7 @@ torch>=2.0.0
 transformers
 accelerate
 safetensors
+bitsandbytes  # Required for quantized model support
 
 # VibeVoice dependencies
 librosa
