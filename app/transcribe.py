@@ -3,6 +3,9 @@
 import re
 import time
 import threading
+import subprocess
+import tempfile
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Generator
@@ -89,6 +92,45 @@ def parse_model_output(raw_output: str) -> list[dict]:
         })
 
     return segments
+
+
+def split_audio(audio_path: str, chunk_minutes: int = 3) -> list[str]:
+    """Split audio into chunks using ffmpeg.
+
+    Args:
+        audio_path: Path to audio file
+        chunk_minutes: Duration of each chunk in minutes
+
+    Returns:
+        List of paths to chunk files
+    """
+    import librosa
+
+    duration = librosa.get_duration(path=audio_path)
+    chunk_seconds = chunk_minutes * 60
+    overlap_seconds = 10
+
+    chunks = []
+    start_time = 0
+    chunk_index = 0
+
+    while start_time < duration:
+        chunk_path = os.path.join(tempfile.gettempdir(), f"chunk_{os.getpid()}_{chunk_index}.mp3")
+
+        subprocess.run([
+            "ffmpeg", "-y",
+            "-ss", str(start_time),
+            "-t", str(chunk_seconds),
+            "-i", audio_path,
+            "-c", "copy",  # No re-encoding for speed
+            chunk_path
+        ], check=True, capture_output=True)
+
+        chunks.append(chunk_path)
+        start_time += (chunk_seconds - overlap_seconds)
+        chunk_index += 1
+
+    return chunks
 
 
 class TranscriptionService:
@@ -287,108 +329,72 @@ class TranscriptionService:
             self.load_model()
 
         start_time = time.time()
+        chunks = []
 
         try:
+            import librosa
             from transformers import TextIteratorStreamer
 
-            # Build context info from hotwords
-            context_info = None
-            if hotwords:
-                terms = [h.strip() for h in hotwords.split(",") if h.strip()]
-                if terms:
-                    context_info = f"Key terms: {', '.join(terms)}"
-
-            # Process audio
-            inputs = self.processor(
-                audio=audio_path,
-                return_tensors="pt",
-                add_generation_prompt=True,
-                context_info=context_info
-            )
-            inputs = {k: v.to(self.device) for k, v in inputs.items()}
-
-            # Create streamer
-            streamer = TextIteratorStreamer(
-                self.processor.tokenizer,
-                skip_prompt=True,
-                skip_special_tokens=True
-            )
-
-            # Container for result from thread
-            result_container = {"text": "", "error": None}
-
-            def generate_thread():
-                try:
-                    with torch.no_grad():
-                        self.model.generate(
-                            **inputs,
-                            max_new_tokens=max_new_tokens,
-                            do_sample=False,
-                            temperature=None,
-                            top_p=None,
-                            eos_token_id=self.processor.tokenizer.eos_token_id,
-                            pad_token_id=getattr(self.processor, 'pad_id', self.processor.tokenizer.pad_token_id),
-                            streamer=streamer,
-                        )
-                except Exception as e:
-                    result_container["error"] = str(e)
-
-            # Start generation in background thread
-            thread = threading.Thread(target=generate_thread)
-            thread.start()
-
-            # Stream output
-            generated_text = ""
-            token_count = 0
-            for new_text in streamer:
-                generated_text += new_text
-                token_count += 1
-                elapsed = time.time() - start_time
-                status = f"--- Generating ({token_count} tokens, {elapsed:.1f}s) ---\n{generated_text}"
-                yield status, None
-
-            thread.join()
-
-            if result_container["error"]:
-                raise Exception(result_container["error"])
-
-            # Get full output with special tokens for parsing
-            full_output = self.processor.decode(
-                self.processor.tokenizer.encode(generated_text),
-                skip_special_tokens=False
-            )
-
-            # Parse segments
-            try:
-                segments = self.processor.post_process_transcription(full_output)
-                if not (segments and isinstance(segments[0], dict)):
-                    segments = parse_model_output(generated_text)
-            except (AttributeError, TypeError, ValueError):
-                segments = parse_model_output(generated_text)
-
-            # Get audio duration
-            import librosa
+            # Check audio duration
             duration = librosa.get_duration(path=audio_path)
 
-            # Count unique speakers
-            speakers = set(seg.get("speaker", "") for seg in segments)
+            # If audio is long, split into chunks
+            if duration > 5 * 60:  # > 5 minutes
+                num_chunks = int(duration / (3 * 60)) + 1
+                yield f"Audio is {duration/60:.1f} minutes. Splitting into {num_chunks} chunks...", None
 
-            processing_time = time.time() - start_time
+                chunks = split_audio(audio_path, chunk_minutes=3)
+                all_segments = []
 
-            result = TranscriptionResult(
-                success=True,
-                segments=segments,
-                full_text=format_transcript(segments),
-                duration_seconds=duration,
-                speakers_detected=len(speakers),
-                processing_time_seconds=processing_time,
-                error=None
-            )
+                for i, chunk_path in enumerate(chunks):
+                    yield f"Processing chunk {i+1}/{len(chunks)}...", None
 
-            yield result.full_text, result
+                    # Process this chunk
+                    chunk_start_time = i * (3 * 60 - 10)  # Account for overlap
+
+                    for partial_text, partial_result in self._transcribe_single_stream(
+                        chunk_path, hotwords, max_new_tokens
+                    ):
+                        if partial_result is None:
+                            yield f"Chunk {i+1}/{len(chunks)}: {partial_text}", None
+                        else:
+                            # Adjust timestamps and merge segments
+                            for seg in partial_result.segments:
+                                seg["start"] += chunk_start_time
+                                seg["end"] += chunk_start_time
+                            all_segments.extend(partial_result.segments)
+
+                # Build final result
+                processing_time = time.time() - start_time
+                speakers = set(seg.get("speaker", "") for seg in all_segments)
+
+                result = TranscriptionResult(
+                    success=True,
+                    segments=all_segments,
+                    full_text=format_transcript(all_segments),
+                    duration_seconds=duration,
+                    speakers_detected=len(speakers),
+                    processing_time_seconds=processing_time,
+                    error=None
+                )
+
+                yield result.full_text, result
+            else:
+                # Single file processing
+                yield "Processing audio...", None
+
+                for partial_text, final_result in self._transcribe_single_stream(
+                    audio_path, hotwords, max_new_tokens
+                ):
+                    yield partial_text, final_result
 
         except Exception as e:
             processing_time = time.time() - start_time
+            error_msg = f"ERROR: {type(e).__name__}: {str(e)}"
+            print(error_msg)
+            import traceback
+            traceback.print_exc()
+
             result = TranscriptionResult(
                 success=False,
                 segments=[],
@@ -398,7 +404,118 @@ class TranscriptionService:
                 processing_time_seconds=processing_time,
                 error=str(e)
             )
-            yield f"Error: {str(e)}", result
+            yield error_msg, result
+        finally:
+            # Clean up chunk files
+            for chunk_path in chunks:
+                Path(chunk_path).unlink(missing_ok=True)
+
+    def _transcribe_single_stream(
+        self,
+        audio_path: str,
+        hotwords: Optional[str],
+        max_new_tokens: int
+    ) -> Generator[tuple[str, Optional[TranscriptionResult]], None, None]:
+        """Transcribe a single audio file with streaming (internal helper)."""
+        from transformers import TextIteratorStreamer
+        import librosa
+
+        start_time = time.time()
+
+        # Build context info from hotwords
+        context_info = None
+        if hotwords:
+            terms = [h.strip() for h in hotwords.split(",") if h.strip()]
+            if terms:
+                context_info = f"Key terms: {', '.join(terms)}"
+
+        # Process audio
+        inputs = self.processor(
+            audio=audio_path,
+            return_tensors="pt",
+            add_generation_prompt=True,
+            context_info=context_info
+        )
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+
+        # Create streamer
+        streamer = TextIteratorStreamer(
+            self.processor.tokenizer,
+            skip_prompt=True,
+            skip_special_tokens=True
+        )
+
+        # Container for result from thread
+        result_container = {"text": "", "error": None}
+
+        def generate_thread():
+            try:
+                with torch.no_grad():
+                    self.model.generate(
+                        **inputs,
+                        max_new_tokens=max_new_tokens,
+                        do_sample=False,
+                        temperature=None,
+                        top_p=None,
+                        eos_token_id=self.processor.tokenizer.eos_token_id,
+                        pad_token_id=getattr(self.processor, 'pad_id', self.processor.tokenizer.pad_token_id),
+                        streamer=streamer,
+                    )
+            except Exception as e:
+                result_container["error"] = str(e)
+
+        # Start generation in background thread
+        thread = threading.Thread(target=generate_thread)
+        thread.start()
+
+        # Stream output
+        generated_text = ""
+        token_count = 0
+        for new_text in streamer:
+            generated_text += new_text
+            token_count += 1
+            elapsed = time.time() - start_time
+            status = f"--- Generating ({token_count} tokens, {elapsed:.1f}s) ---\n{generated_text}"
+            yield status, None
+
+        thread.join()
+
+        if result_container["error"]:
+            raise Exception(result_container["error"])
+
+        # Get full output with special tokens for parsing
+        full_output = self.processor.decode(
+            self.processor.tokenizer.encode(generated_text),
+            skip_special_tokens=False
+        )
+
+        # Parse segments
+        try:
+            segments = self.processor.post_process_transcription(full_output)
+            if not (segments and isinstance(segments[0], dict)):
+                segments = parse_model_output(generated_text)
+        except (AttributeError, TypeError, ValueError):
+            segments = parse_model_output(generated_text)
+
+        # Get audio duration
+        duration = librosa.get_duration(path=audio_path)
+
+        # Count unique speakers
+        speakers = set(seg.get("speaker", "") for seg in segments)
+
+        processing_time = time.time() - start_time
+
+        result = TranscriptionResult(
+            success=True,
+            segments=segments,
+            full_text=format_transcript(segments),
+            duration_seconds=duration,
+            speakers_detected=len(speakers),
+            processing_time_seconds=processing_time,
+            error=None
+        )
+
+        yield result.full_text, result
 
 
 # Global service instance
