@@ -400,8 +400,9 @@ class TranscriptionService:
                         else:
                             # Adjust timestamps and merge segments
                             for seg in partial_result.segments:
-                                seg["start"] += chunk_start_time
-                                seg["end"] += chunk_start_time
+                                if "start" in seg and "end" in seg:
+                                    seg["start"] += chunk_start_time
+                                    seg["end"] += chunk_start_time
                             all_segments.extend(partial_result.segments)
 
                 # Build final result
