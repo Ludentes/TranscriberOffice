@@ -12,6 +12,13 @@ if (-not (Test-Path "venv")) {
     exit 1
 }
 
+# Quick check for VibeVoice installation
+.\venv\Scripts\python.exe -c "from vibevoice.processor.vibevoice_asr_processor import VibeVoiceASRProcessor" 2>$null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: VibeVoice not found. Please run .\install.ps1" -ForegroundColor Red
+    exit 1
+}
+
 # Activate venv
 .\venv\Scripts\Activate.ps1
 

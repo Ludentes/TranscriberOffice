@@ -148,13 +148,43 @@ mkdir -p models
 # Verify installation
 echo ""
 echo "Verifying installation..."
-python3 -c "
+python -c "
 import torch
 print(f'PyTorch: {torch.__version__}')
 print(f'CUDA available: {torch.cuda.is_available()}')
 if torch.cuda.is_available():
     print(f'CUDA device: {torch.cuda.get_device_name(0)}')
 "
+
+# Verify VibeVoice installation
+echo "Verifying VibeVoice installation..."
+cd VibeVoice || exit 1
+
+pip install -e . 2>&1 | tee install.log
+
+if [ ${PIPESTATUS[0]} -ne 0 ]; then
+    echo "ERROR: VibeVoice installation failed. See install.log"
+    exit 1
+fi
+
+# Verify imports work
+python -c "
+import sys
+try:
+    from vibevoice.processor.vibevoice_asr_processor import VibeVoiceASRProcessor
+    from vibevoice.modular.modeling_vibevoice_asr import VibeVoiceASRForConditionalGeneration
+    print('✓ VibeVoice installed and imports work')
+except ImportError as e:
+    print(f'✗ VibeVoice import failed: {e}', file=sys.stderr)
+    sys.exit(1)
+"
+
+if [ $? -ne 0 ]; then
+    echo "ERROR: VibeVoice imports failed"
+    exit 1
+fi
+
+cd ..
 
 echo ""
 echo "=========================================="

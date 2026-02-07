@@ -12,6 +12,12 @@ if [ ! -d "venv" ]; then
     exit 1
 fi
 
+# Quick check for VibeVoice installation
+./venv/bin/python -c "from vibevoice.processor.vibevoice_asr_processor import VibeVoiceASRProcessor" 2>/dev/null || {
+    echo "ERROR: VibeVoice not found. Please run ./install.sh"
+    exit 1
+}
+
 # Activate venv
 source venv/bin/activate
 

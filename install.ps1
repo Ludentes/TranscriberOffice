@@ -141,6 +141,36 @@ if torch.cuda.is_available():
     print(f'CUDA device: {torch.cuda.get_device_name(0)}')
 "@
 
+# Verify VibeVoice installation
+Write-Host "Verifying VibeVoice installation..." -ForegroundColor Cyan
+Set-Location VibeVoice
+
+pip install -e . 2>&1 | Tee-Object -FilePath install.log
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: VibeVoice installation failed. See install.log" -ForegroundColor Red
+    exit 1
+}
+
+# Verify imports work
+python -c @"
+import sys
+try:
+    from vibevoice.processor.vibevoice_asr_processor import VibeVoiceASRProcessor
+    from vibevoice.modular.modeling_vibevoice_asr import VibeVoiceASRForConditionalGeneration
+    print('✓ VibeVoice installed and imports work')
+except ImportError as e:
+    print(f'✗ VibeVoice import failed: {e}', file=sys.stderr)
+    sys.exit(1)
+"@
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: VibeVoice imports failed" -ForegroundColor Red
+    exit 1
+}
+
+Set-Location ..
+
 Write-Host ""
 Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host "  Installation complete!" -ForegroundColor Green
