@@ -399,10 +399,18 @@ class TranscriptionService:
                             yield f"Chunk {i+1}/{len(chunks)}: {partial_text}", None
                         else:
                             # Adjust timestamps and merge segments
+                            print(f"DEBUG: Chunk {i+1} returned {len(partial_result.segments)} segments")
+                            if partial_result.segments:
+                                print(f"DEBUG: First segment before adjustment: {partial_result.segments[0]}")
+
                             for seg in partial_result.segments:
                                 if "start" in seg and "end" in seg:
                                     seg["start"] += chunk_start_time
                                     seg["end"] += chunk_start_time
+
+                            if partial_result.segments:
+                                print(f"DEBUG: First segment after adjustment (chunk_start_time={chunk_start_time}): {partial_result.segments[0]}")
+
                             all_segments.extend(partial_result.segments)
 
                 # Build final result
@@ -547,7 +555,12 @@ class TranscriptionService:
             segments = self.processor.post_process_transcription(full_output)
             if not (segments and isinstance(segments[0], dict)):
                 segments = parse_model_output(generated_text)
-        except (AttributeError, TypeError, ValueError):
+            else:
+                # Debug: Check what post_process_transcription returns
+                if segments and len(segments) > 0:
+                    print(f"DEBUG: First segment from post_process: {segments[0]}")
+        except (AttributeError, TypeError, ValueError) as e:
+            print(f"DEBUG: post_process_transcription failed: {e}, using fallback parser")
             segments = parse_model_output(generated_text)
 
         # Get audio duration
