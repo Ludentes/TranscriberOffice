@@ -110,16 +110,26 @@ class TranscriptionService:
         self.model = None
         self.processor = None
         self._loaded = False
+        self.current_model_path = None  # Track what's loaded
 
     def load_model(self) -> None:
         """Load the VibeVoice-ASR model."""
+        # Detect model path change
+        if self._loaded and hasattr(self, 'current_model_path'):
+            if self.current_model_path != self.model_path:
+                print(f"Switching model: {self.current_model_path} -> {self.model_path}")
+                self.unload_model()
+
         if self._loaded:
             return
+
+        # Import here to avoid loading at module import time
+        from transformers import AutoProcessor, AutoModelForCausalLM
 
         print(f"Loading model: {self.model_path}")
         print(f"Device: {self.device}, dtype: {self.dtype}")
 
-        # Load VibeVoice-specific model and processor
+        # Try VibeVoice-specific imports first
         try:
             from vibevoice.processor.vibevoice_asr_processor import VibeVoiceASRProcessor
             from vibevoice.modular.modeling_vibevoice_asr import VibeVoiceASRForConditionalGeneration
@@ -146,7 +156,22 @@ class TranscriptionService:
         self.model = self.model.to(self.device)
         self.model.eval()
         self._loaded = True
+        self.current_model_path = self.model_path
         print("Model loaded successfully")
+
+    def unload_model(self) -> None:
+        """Free GPU memory by unloading model."""
+        if self.model is not None:
+            del self.model
+            del self.processor
+        self.model = None
+        self.processor = None
+        self._loaded = False
+
+        import gc
+        gc.collect()
+        torch.cuda.empty_cache()
+        print("Model unloaded and GPU memory freed")
 
     def transcribe(
         self,
