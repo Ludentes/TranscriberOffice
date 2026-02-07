@@ -118,7 +118,7 @@ def create_ui() -> gr.Blocks:
             """Start transcription and reset stop flag."""
             from app.transcribe import set_stop_flag
             set_stop_flag(False)  # Reset flag
-            return process_audio_stream(audio, hotwords)
+            yield from process_audio_stream(audio, hotwords)
 
         # Connect the buttons
         stop_btn.click(fn=stop_transcription, outputs=text_output)
