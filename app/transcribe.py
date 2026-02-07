@@ -12,6 +12,8 @@ from typing import Optional, Generator
 
 import torch
 
+from app.config import get_config
+
 
 # Global stop flag for canceling transcription
 _stop_flag = False
@@ -117,12 +119,13 @@ def parse_model_output(raw_output: str) -> list[dict]:
     return segments
 
 
-def split_audio(audio_path: str, chunk_minutes: int = 3) -> list[str]:
+def split_audio(audio_path: str, chunk_minutes: int = 3, overlap_seconds: int = 10) -> list[str]:
     """Split audio into chunks using ffmpeg.
 
     Args:
         audio_path: Path to audio file
         chunk_minutes: Duration of each chunk in minutes
+        overlap_seconds: Overlap between chunks in seconds
 
     Returns:
         List of paths to chunk files
@@ -131,7 +134,6 @@ def split_audio(audio_path: str, chunk_minutes: int = 3) -> list[str]:
 
     duration = librosa.get_duration(path=audio_path)
     chunk_seconds = chunk_minutes * 60
-    overlap_seconds = 10
 
     chunks = []
     start_time = 0
@@ -371,14 +373,20 @@ class TranscriptionService:
             # Check audio duration
             duration = librosa.get_duration(path=audio_path)
 
+            # Get chunking config
+            config = get_config()
+            chunk_threshold = config.transcription.chunk_threshold_minutes * 60
+            chunk_size = config.transcription.chunk_size_minutes
+            chunk_overlap = config.transcription.chunk_overlap_seconds
+
             # If audio is long, split into chunks
-            if duration > 5 * 60:  # > 5 minutes
-                num_chunks = int(duration / (3 * 60)) + 1
-                msg = f"Audio is {duration/60:.1f} minutes. Splitting into {num_chunks} chunks..."
+            if duration > chunk_threshold:
+                num_chunks = int(duration / (chunk_size * 60)) + 1
+                msg = f"Audio is {duration/60:.1f} minutes. Splitting into {num_chunks} chunks ({chunk_size}min each)..."
                 print(msg)  # Console logging
                 yield msg, None
 
-                chunks = split_audio(audio_path, chunk_minutes=3)
+                chunks = split_audio(audio_path, chunk_minutes=chunk_size, overlap_seconds=chunk_overlap)
                 all_segments = []
 
                 for i, chunk_path in enumerate(chunks):
@@ -397,7 +405,7 @@ class TranscriptionService:
                     yield msg, None
 
                     # Process this chunk
-                    chunk_start_time = i * (3 * 60 - 10)  # Account for overlap
+                    chunk_start_time = i * (chunk_size * 60 - chunk_overlap)  # Account for overlap
 
                     for partial_text, partial_result in self._transcribe_single_stream(
                         chunk_path, hotwords, max_new_tokens

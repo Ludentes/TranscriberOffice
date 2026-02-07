@@ -28,6 +28,10 @@ class TranscriptionConfig:
     max_file_size_mb: int = 500
     timeout_seconds: int = 1800
     default_max_new_tokens: int = 8192
+    # Audio chunking settings
+    chunk_threshold_minutes: int = 5
+    chunk_size_minutes: int = 3
+    chunk_overlap_seconds: int = 10
 
 
 @dataclass

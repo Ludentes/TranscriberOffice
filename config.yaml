@@ -18,3 +18,7 @@ transcription:
   max_file_size_mb: 500
   timeout_seconds: 1800
   default_max_new_tokens: 8192
+  # Audio chunking settings (to prevent GPU OOM on long files)
+  chunk_threshold_minutes: 5  # Split files longer than this
+  chunk_size_minutes: 3  # Size of each chunk
+  chunk_overlap_seconds: 10  # Overlap between chunks to prevent missing words
