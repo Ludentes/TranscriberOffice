@@ -58,11 +58,12 @@ def format_transcript(segments: list[dict]) -> str:
         start = format_timestamp(seg.get("start_time", seg.get("start", 0)))
         end = format_timestamp(seg.get("end_time", seg.get("end", 0)))
         speaker_id = seg.get("speaker_id", seg.get("speaker", "Unknown"))
-        # Format speaker_id as "Speaker X" if it's a number
+        # Format speaker_id as "Speaker X" if it's a plain number (non-chunked)
+        # Chunked segments already have formatted speaker IDs like "Speaker 1 (Chunk 2)"
         if isinstance(speaker_id, (int, float)):
             speaker = f"Speaker {int(speaker_id)}"
         else:
-            speaker = speaker_id
+            speaker = str(speaker_id)
         text = seg.get("text", "").strip()
         lines.append(f'[{speaker}] {start} - {end}')
         lines.append(f'"{text}"')
@@ -410,13 +411,25 @@ class TranscriptionService:
                                 print(f"DEBUG: First segment before adjustment: {partial_result.segments[0]}")
 
                             for seg in partial_result.segments:
-                                # Support both naming conventions
+                                # Adjust timestamps
                                 if "start_time" in seg and "end_time" in seg:
                                     seg["start_time"] += chunk_start_time
                                     seg["end_time"] += chunk_start_time
                                 elif "start" in seg and "end" in seg:
                                     seg["start"] += chunk_start_time
                                     seg["end"] += chunk_start_time
+
+                                # Add chunk number to speaker ID to show they're chunk-local
+                                chunk_num = i + 1
+                                if "speaker_id" in seg:
+                                    # If it's numeric, format as "Speaker X (Chunk Y)"
+                                    speaker_id = seg["speaker_id"]
+                                    if isinstance(speaker_id, (int, float)):
+                                        seg["speaker_id"] = f"Speaker {int(speaker_id)} (Chunk {chunk_num})"
+                                    else:
+                                        seg["speaker_id"] = f"{speaker_id} (Chunk {chunk_num})"
+                                elif "speaker" in seg:
+                                    seg["speaker"] = f"{seg['speaker']} (Chunk {chunk_num})"
 
                             if partial_result.segments:
                                 print(f"DEBUG: First segment after adjustment (chunk_start_time={chunk_start_time}): {partial_result.segments[0]}")
