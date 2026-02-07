@@ -18,6 +18,25 @@ fi
     exit 1
 }
 
+# Check GPU compatibility
+./venv/bin/python -c "
+import torch
+import sys
+
+if torch.cuda.is_available():
+    try:
+        # Try a simple CUDA operation
+        x = torch.randn(10, 10).cuda()
+        y = x @ x.t()
+    except RuntimeError as e:
+        if 'no kernel image is available' in str(e) or 'not compatible' in str(e):
+            capability = torch.cuda.get_device_capability(0)
+            print(f'ERROR: Your GPU (sm_{capability[0]}{capability[1]}) is not compatible with this PyTorch installation.')
+            print(f'Please run ./install.sh to reinstall PyTorch with proper CUDA support.')
+            sys.exit(1)
+        raise
+" || exit 1
+
 # Activate venv
 source venv/bin/activate
 

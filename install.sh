@@ -39,26 +39,39 @@ fi
 # Check NVIDIA GPU
 echo ""
 echo "Checking GPU..."
+PYTORCH_CUDA_VERSION="cu124"  # Default to CUDA 12.4
 if command -v nvidia-smi &> /dev/null; then
     GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -n1)
     GPU_MEMORY=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader | head -n1)
     echo -e "${GREEN}✓ Found GPU: $GPU_NAME ($GPU_MEMORY)${NC}"
 
-    # Detect GPU architecture for dtype recommendation
+    # Detect GPU architecture for dtype recommendation and CUDA version
     COMPUTE_CAP=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -n1 | tr -d '.')
-    if [ "$COMPUTE_CAP" -ge 80 ]; then
+    if [ "$COMPUTE_CAP" -ge 120 ]; then
+        # Blackwell (RTX 50 series) - needs latest PyTorch with sm_120
         RECOMMENDED_DTYPE="bfloat16"
         RECOMMENDED_MODEL="microsoft/VibeVoice-ASR"
+        PYTORCH_CUDA_VERSION="cu124"  # Use latest CUDA
+        echo "  Blackwell GPU detected (sm_120) - will use BF16 and CUDA 12.4+"
+        echo -e "${YELLOW}  Note: Requires PyTorch with sm_120 support${NC}"
+    elif [ "$COMPUTE_CAP" -ge 80 ]; then
+        # Ampere/Ada (RTX 30/40 series)
+        RECOMMENDED_DTYPE="bfloat16"
+        RECOMMENDED_MODEL="microsoft/VibeVoice-ASR"
+        PYTORCH_CUDA_VERSION="cu121"
         echo "  Ampere+ GPU detected - will use BF16"
     else
+        # Pre-Ampere
         RECOMMENDED_DTYPE="float16"
         RECOMMENDED_MODEL="scerz/VibeVoice-ASR-4bit"
+        PYTORCH_CUDA_VERSION="cu121"
         echo "  Pre-Ampere GPU detected - will use FP16 with 4-bit model"
     fi
 else
     echo -e "${YELLOW}Warning: nvidia-smi not found. GPU support may not work.${NC}"
     RECOMMENDED_DTYPE="float32"
     RECOMMENDED_MODEL="scerz/VibeVoice-ASR-4bit"
+    PYTORCH_CUDA_VERSION="cu121"
 fi
 
 # Check FFmpeg
@@ -99,8 +112,8 @@ pip install --upgrade pip
 
 # Install PyTorch with CUDA
 echo ""
-echo "Installing PyTorch with CUDA support..."
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+echo "Installing PyTorch with CUDA support ($PYTORCH_CUDA_VERSION)..."
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/$PYTORCH_CUDA_VERSION
 
 # Install requirements
 echo ""
@@ -154,6 +167,25 @@ print(f'PyTorch: {torch.__version__}')
 print(f'CUDA available: {torch.cuda.is_available()}')
 if torch.cuda.is_available():
     print(f'CUDA device: {torch.cuda.get_device_name(0)}')
+    print(f'CUDA version: {torch.version.cuda}')
+
+    # Check GPU compatibility
+    capability = torch.cuda.get_device_capability(0)
+    cap_str = f'sm_{capability[0]}{capability[1]}'
+    print(f'Compute capability: {cap_str}')
+
+    # Test if GPU is actually usable
+    try:
+        x = torch.randn(10, 10).cuda()
+        y = x @ x.t()
+        print('✓ GPU is working correctly')
+    except RuntimeError as e:
+        if 'no kernel image is available' in str(e) or 'not compatible' in str(e):
+            print(f'✗ WARNING: GPU {cap_str} not compatible with this PyTorch build')
+            print(f'  This PyTorch supports: {\" \".join([f\"sm_{c}\" for c in [50, 60, 70, 75, 80, 86, 90]])}')
+            print(f'  For {cap_str} support, you may need PyTorch nightly or a newer release')
+        else:
+            raise
 "
 
 # Verify VibeVoice installation
