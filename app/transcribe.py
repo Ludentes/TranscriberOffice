@@ -353,7 +353,9 @@ class TranscriptionService:
 
             # Check stop flag before starting
             if check_stop_flag():
-                yield "Stopped by user.", TranscriptionResult(
+                msg = "Stopped by user."
+                print(msg)
+                yield msg, TranscriptionResult(
                     success=False, segments=[], full_text="",
                     duration_seconds=0, speakers_detected=0, error="Stopped"
                 )
@@ -365,7 +367,9 @@ class TranscriptionService:
             # If audio is long, split into chunks
             if duration > 5 * 60:  # > 5 minutes
                 num_chunks = int(duration / (3 * 60)) + 1
-                yield f"Audio is {duration/60:.1f} minutes. Splitting into {num_chunks} chunks...", None
+                msg = f"Audio is {duration/60:.1f} minutes. Splitting into {num_chunks} chunks..."
+                print(msg)  # Console logging
+                yield msg, None
 
                 chunks = split_audio(audio_path, chunk_minutes=3)
                 all_segments = []
@@ -373,13 +377,17 @@ class TranscriptionService:
                 for i, chunk_path in enumerate(chunks):
                     # Check stop flag before each chunk
                     if check_stop_flag():
-                        yield "Stopped by user.", TranscriptionResult(
+                        msg = "Stopped by user."
+                        print(msg)
+                        yield msg, TranscriptionResult(
                             success=False, segments=[], full_text="",
                             duration_seconds=0, speakers_detected=0, error="Stopped"
                         )
                         return
 
-                    yield f"Processing chunk {i+1}/{len(chunks)}...", None
+                    msg = f"Processing chunk {i+1}/{len(chunks)}..."
+                    print(msg)  # Console logging
+                    yield msg, None
 
                     # Process this chunk
                     chunk_start_time = i * (3 * 60 - 10)  # Account for overlap
@@ -413,7 +421,9 @@ class TranscriptionService:
                 yield result.full_text, result
             else:
                 # Single file processing
-                yield "Processing audio...", None
+                msg = "Processing audio..."
+                print(msg)  # Console logging
+                yield msg, None
 
                 for partial_text, final_result in self._transcribe_single_stream(
                     audio_path, hotwords, max_new_tokens
@@ -506,7 +516,9 @@ class TranscriptionService:
         for new_text in streamer:
             # Check stop flag during generation
             if check_stop_flag():
-                yield "Stopped by user.", TranscriptionResult(
+                msg = "Stopped by user."
+                print(msg)
+                yield msg, TranscriptionResult(
                     success=False, segments=[], full_text="",
                     duration_seconds=0, speakers_detected=0, error="Stopped"
                 )
