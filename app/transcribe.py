@@ -54,9 +54,15 @@ def format_transcript(segments: list[dict]) -> str:
     """Format segments into human-readable transcript."""
     lines = []
     for seg in segments:
-        start = format_timestamp(seg.get("start", 0))
-        end = format_timestamp(seg.get("end", 0))
-        speaker = seg.get("speaker", "Unknown")
+        # Support both naming conventions: start/start_time, end/end_time, speaker/speaker_id
+        start = format_timestamp(seg.get("start_time", seg.get("start", 0)))
+        end = format_timestamp(seg.get("end_time", seg.get("end", 0)))
+        speaker_id = seg.get("speaker_id", seg.get("speaker", "Unknown"))
+        # Format speaker_id as "Speaker X" if it's a number
+        if isinstance(speaker_id, (int, float)):
+            speaker = f"Speaker {int(speaker_id)}"
+        else:
+            speaker = speaker_id
         text = seg.get("text", "").strip()
         lines.append(f'[{speaker}] {start} - {end}')
         lines.append(f'"{text}"')
@@ -299,7 +305,7 @@ class TranscriptionService:
             duration = librosa.get_duration(path=audio_path)
 
             # Count unique speakers
-            speakers = set(seg.get("speaker", "") for seg in segments)
+            speakers = set(seg.get("speaker_id", seg.get("speaker", "")) for seg in segments)
 
             processing_time = time.time() - start_time
 
@@ -404,7 +410,11 @@ class TranscriptionService:
                                 print(f"DEBUG: First segment before adjustment: {partial_result.segments[0]}")
 
                             for seg in partial_result.segments:
-                                if "start" in seg and "end" in seg:
+                                # Support both naming conventions
+                                if "start_time" in seg and "end_time" in seg:
+                                    seg["start_time"] += chunk_start_time
+                                    seg["end_time"] += chunk_start_time
+                                elif "start" in seg and "end" in seg:
                                     seg["start"] += chunk_start_time
                                     seg["end"] += chunk_start_time
 
@@ -567,7 +577,7 @@ class TranscriptionService:
         duration = librosa.get_duration(path=audio_path)
 
         # Count unique speakers
-        speakers = set(seg.get("speaker", "") for seg in segments)
+        speakers = set(seg.get("speaker_id", seg.get("speaker", "")) for seg in segments)
 
         processing_time = time.time() - start_time
 
