@@ -13,6 +13,22 @@ from typing import Optional, Generator
 import torch
 
 
+# Global stop flag for canceling transcription
+_stop_flag = False
+
+
+def set_stop_flag(value: bool) -> None:
+    """Set the global stop flag."""
+    global _stop_flag
+    _stop_flag = value
+
+
+def check_stop_flag() -> bool:
+    """Check the global stop flag."""
+    global _stop_flag
+    return _stop_flag
+
+
 @dataclass
 class TranscriptionResult:
     """Result from transcription."""
@@ -335,6 +351,14 @@ class TranscriptionService:
             import librosa
             from transformers import TextIteratorStreamer
 
+            # Check stop flag before starting
+            if check_stop_flag():
+                yield "Stopped by user.", TranscriptionResult(
+                    success=False, segments=[], full_text="",
+                    duration_seconds=0, speakers_detected=0, error="Stopped"
+                )
+                return
+
             # Check audio duration
             duration = librosa.get_duration(path=audio_path)
 
@@ -347,6 +371,14 @@ class TranscriptionService:
                 all_segments = []
 
                 for i, chunk_path in enumerate(chunks):
+                    # Check stop flag before each chunk
+                    if check_stop_flag():
+                        yield "Stopped by user.", TranscriptionResult(
+                            success=False, segments=[], full_text="",
+                            duration_seconds=0, speakers_detected=0, error="Stopped"
+                        )
+                        return
+
                     yield f"Processing chunk {i+1}/{len(chunks)}...", None
 
                     # Process this chunk
@@ -472,6 +504,14 @@ class TranscriptionService:
         generated_text = ""
         token_count = 0
         for new_text in streamer:
+            # Check stop flag during generation
+            if check_stop_flag():
+                yield "Stopped by user.", TranscriptionResult(
+                    success=False, segments=[], full_text="",
+                    duration_seconds=0, speakers_detected=0, error="Stopped"
+                )
+                return
+
             generated_text += new_text
             token_count += 1
             elapsed = time.time() - start_time

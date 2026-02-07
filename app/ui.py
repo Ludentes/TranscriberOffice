@@ -84,7 +84,9 @@ def create_ui() -> gr.Blocks:
                     info="Comma-separated terms to improve recognition"
                 )
 
-                transcribe_btn = gr.Button("Transcribe", variant="primary")
+                with gr.Row():
+                    transcribe_btn = gr.Button("Transcribe", variant="primary")
+                    stop_btn = gr.Button("Stop", variant="stop")
 
             with gr.Column(scale=2):
                 with gr.Tab("Transcript"):
@@ -106,9 +108,22 @@ def create_ui() -> gr.Blocks:
                 "Add relevant names and terms as hotwords."
             )
 
-        # Connect the button with streaming
+        def stop_transcription():
+            """Stop the current transcription."""
+            from app.transcribe import set_stop_flag
+            set_stop_flag(True)
+            return "Stopping..."
+
+        def start_transcription(audio, hotwords):
+            """Start transcription and reset stop flag."""
+            from app.transcribe import set_stop_flag
+            set_stop_flag(False)  # Reset flag
+            return process_audio_stream(audio, hotwords)
+
+        # Connect the buttons
+        stop_btn.click(fn=stop_transcription, outputs=text_output)
         transcribe_btn.click(
-            fn=process_audio_stream,
+            fn=start_transcription,
             inputs=[audio_input, hotwords_input],
             outputs=[text_output, json_output]
         )
