@@ -109,9 +109,9 @@ def auto_chunk_settings() -> tuple[int, int]:
 
     available_gb = total_vram_gb - model_gb
 
-    # Heuristic: ~1.5GB VRAM per minute of audio for inference activations
+    # Heuristic: ~1.8GB VRAM per minute of audio for inference activations
     # This is approximate and depends on model architecture
-    gb_per_minute = 1.5
+    gb_per_minute = 1.8
     max_chunk_minutes = max(2, int(available_gb / gb_per_minute))
 
     # Cap at reasonable values
