@@ -50,16 +50,25 @@ def test_split_audio_cleanup():
         assert not Path(path).exists()
 
 
+def _mock_config(threshold=5, chunk_size=3, overlap=10):
+    """Create a mock config with specified chunking settings."""
+    mock_cfg = Mock()
+    mock_cfg.transcription.chunk_threshold_minutes = threshold
+    mock_cfg.transcription.chunk_size_minutes = chunk_size
+    mock_cfg.transcription.chunk_overlap_seconds = overlap
+    return mock_cfg
+
+
 def test_transcribe_stream_chunks_large_audio():
     """Verify large audio files are chunked before processing."""
     from app.transcribe import TranscriptionService, TranscriptionResult
 
     service = TranscriptionService()
 
-    # Mock librosa to return 7 minutes
-    with patch('librosa.get_duration', return_value=420.0):
-        # Mock split_audio
-        with patch('app.transcribe.split_audio', return_value=["/chunk1.mp3", "/chunk2.mp3"]):
+    # Mock librosa to return 7 minutes (above 5-min threshold)
+    with patch('librosa.get_duration', return_value=420.0), \
+         patch('app.transcribe.get_config', return_value=_mock_config(threshold=5)), \
+         patch('app.transcribe.split_audio', return_value=["/chunk1.mp3", "/chunk2.mp3"]):
             # Mock _transcribe_single_stream to return a simple result
             mock_result = TranscriptionResult(
                 success=True,

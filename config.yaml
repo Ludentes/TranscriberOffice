@@ -12,13 +12,16 @@ model:
   # Attention implementation: "sdpa", "eager" (flash_attention_2 requires separate install)
   attn_implementation: "sdpa"
   # Use quantized 4-bit model: "auto" (pre-Ampere GPUs), "true", "false"
-  use_quantized: "auto"
+  use_quantized: "true"
+  # Multi-GPU: "auto" (use all GPUs if 2+), "single" (force 1 GPU), or "balanced_low_0"
+  device_map: "auto"
 
 transcription:
   max_file_size_mb: 500
   timeout_seconds: 1800
   default_max_new_tokens: 8192
   # Audio chunking settings (to prevent GPU OOM on long files)
-  chunk_threshold_minutes: 5  # Split files longer than this
-  chunk_size_minutes: 3  # Size of each chunk
+  # Set to 0 for auto-calculation based on GPU memory
+  chunk_threshold_minutes: 0  # 0 = auto, or minutes before splitting
+  chunk_size_minutes: 0  # 0 = auto, or chunk duration in minutes
   chunk_overlap_seconds: 10  # Overlap between chunks to prevent missing words

@@ -35,11 +35,17 @@ def test_progress_messages_during_chunking():
     """Verify progress messages are yielded during chunking."""
     from app.transcribe import TranscriptionService
 
+    mock_cfg = Mock()
+    mock_cfg.transcription.chunk_threshold_minutes = 5
+    mock_cfg.transcription.chunk_size_minutes = 3
+    mock_cfg.transcription.chunk_overlap_seconds = 10
+
     service = TranscriptionService()
     service._loaded = True
 
-    with patch('librosa.get_duration', return_value=420.0):  # 7 minutes
-        with patch('app.transcribe.split_audio', return_value=["/chunk1.mp3", "/chunk2.mp3"]):
+    with patch('librosa.get_duration', return_value=420.0), \
+         patch('app.transcribe.get_config', return_value=mock_cfg), \
+         patch('app.transcribe.split_audio', return_value=["/chunk1.mp3", "/chunk2.mp3"]):
             with patch.object(service, '_transcribe_single_stream', return_value=iter([
                 ("result", Mock(segments=[], success=True))
             ])):

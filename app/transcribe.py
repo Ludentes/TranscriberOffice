@@ -167,16 +167,19 @@ class TranscriptionService:
         dtype: torch.dtype = torch.bfloat16,
         device: str = "cuda",
         cache_dir: Optional[str] = None,
-        attn_implementation: str = "sdpa"
+        attn_implementation: str = "sdpa",
+        device_map: str = "auto"
     ):
         self.model_path = model_path
         self.dtype = dtype
         self.device = device
         self.cache_dir = cache_dir
         self.attn_implementation = attn_implementation
+        self.device_map = device_map
         self.model = None
         self.processor = None
         self._loaded = False
+        self._using_device_map = False  # Whether model is split across GPUs
         self.current_model_path = None  # Track what's loaded
 
     def load_model(self) -> None:
@@ -189,8 +192,11 @@ class TranscriptionService:
         if self._loaded:
             return
 
+        # Determine if we should use device_map for multi-GPU
+        use_device_map = self._resolve_device_map()
+
         print(f"Loading model: {self.model_path}")
-        print(f"Device: {self.device}, dtype: {self.dtype}")
+        print(f"Device: {self.device}, dtype: {self.dtype}, device_map: {use_device_map or 'none'}")
 
         # Try VibeVoice-specific imports first
         try:
@@ -202,12 +208,20 @@ class TranscriptionService:
                 cache_dir=self.cache_dir,
                 trust_remote_code=True
             )
-            self.model = VibeVoiceASRForConditionalGeneration.from_pretrained(
-                self.model_path,
+
+            model_kwargs = dict(
                 torch_dtype=self.dtype,
                 cache_dir=self.cache_dir,
                 attn_implementation=self.attn_implementation,
                 trust_remote_code=True
+            )
+            if use_device_map:
+                model_kwargs["device_map"] = use_device_map
+                self._using_device_map = True
+
+            self.model = VibeVoiceASRForConditionalGeneration.from_pretrained(
+                self.model_path,
+                **model_kwargs
             )
         except ImportError as e:
             raise ImportError(
@@ -216,11 +230,43 @@ class TranscriptionService:
                 f"Error: {e}"
             )
 
-        self.model = self.model.to(self.device)
+        # Only manually move to device if not using device_map
+        if not self._using_device_map:
+            self.model = self.model.to(self.device)
+
         self.model.eval()
         self._loaded = True
         self.current_model_path = self.model_path
         print("Model loaded successfully")
+        if self._using_device_map:
+            print(f"Model distributed across devices: {set(str(p.device) for p in self.model.parameters())}")
+
+    def _resolve_device_map(self) -> Optional[str]:
+        """Determine whether to use device_map for model loading."""
+        if self.device_map == "single":
+            return None
+
+        gpu_count = torch.cuda.device_count()
+
+        if self.device_map == "auto":
+            if gpu_count >= 2:
+                print(f"  Multi-GPU detected ({gpu_count} GPUs) - using device_map='balanced_low_0'")
+                return "balanced_low_0"
+            return None
+
+        # Explicit device_map value (e.g. "balanced", "balanced_low_0", "sequential")
+        if gpu_count >= 2:
+            return self.device_map
+        print(f"  Warning: device_map='{self.device_map}' requested but only {gpu_count} GPU(s) found, ignoring")
+        return None
+
+    @property
+    def input_device(self) -> str:
+        """Get the device to place input tensors on."""
+        if self._using_device_map and self.model is not None:
+            # When using device_map, inputs go to the first module's device
+            return next(iter(self.model.parameters())).device
+        return self.device
 
     def unload_model(self) -> None:
         """Free GPU memory by unloading model."""
@@ -230,6 +276,7 @@ class TranscriptionService:
         self.model = None
         self.processor = None
         self._loaded = False
+        self._using_device_map = False
 
         import gc
         gc.collect()
@@ -272,7 +319,7 @@ class TranscriptionService:
                 add_generation_prompt=True,
                 context_info=context_info
             )
-            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            inputs = {k: v.to(self.input_device) for k, v in inputs.items()}
 
             # Generate transcription
             with torch.no_grad():
@@ -375,9 +422,20 @@ class TranscriptionService:
 
             # Get chunking config
             config = get_config()
-            chunk_threshold = config.transcription.chunk_threshold_minutes * 60
+            chunk_threshold_min = config.transcription.chunk_threshold_minutes
             chunk_size = config.transcription.chunk_size_minutes
             chunk_overlap = config.transcription.chunk_overlap_seconds
+
+            # Auto-calculate chunk settings if set to 0
+            if chunk_threshold_min == 0 or chunk_size == 0:
+                from app.config import auto_chunk_settings
+                auto_threshold, auto_size = auto_chunk_settings()
+                if chunk_threshold_min == 0:
+                    chunk_threshold_min = auto_threshold
+                if chunk_size == 0:
+                    chunk_size = auto_size
+
+            chunk_threshold = chunk_threshold_min * 60
 
             # If audio is long, split into chunks
             if duration > chunk_threshold:
@@ -518,7 +576,7 @@ class TranscriptionService:
             add_generation_prompt=True,
             context_info=context_info
         )
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        inputs = {k: v.to(self.input_device) for k, v in inputs.items()}
 
         # Create streamer
         streamer = TextIteratorStreamer(
@@ -629,6 +687,7 @@ def get_transcription_service() -> TranscriptionService:
             model_path=get_model_path(config.model),
             dtype=get_torch_dtype(config.model.dtype),
             cache_dir=config.model.cache_dir,
-            attn_implementation=config.model.attn_implementation
+            attn_implementation=config.model.attn_implementation,
+            device_map=config.model.device_map
         )
     return _service
