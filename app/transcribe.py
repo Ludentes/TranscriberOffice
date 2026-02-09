@@ -241,7 +241,12 @@ class TranscriptionService:
         self.current_model_path = self.model_path
         print("Model loaded successfully")
         if self._using_device_map:
-            print(f"Model distributed across devices: {set(str(p.device) for p in self.model.parameters())}")
+            from collections import Counter
+            device_counts = Counter(str(p.device) for p in self.model.parameters())
+            print(f"Model parameter distribution: {dict(device_counts)}")
+            if "meta" in str(device_counts):
+                print("WARNING: Some parameters are on 'meta' device (not materialized). "
+                      "Increase max_memory limits or use fewer GPUs.")
 
     def _resolve_device_map(self) -> tuple[Optional[str], Optional[dict]]:
         """Determine whether to use device_map for model loading.
@@ -267,9 +272,6 @@ class TranscriptionService:
             # Use 75% for model weights, leave 25% for activations
             model_limit_gb = int(total_gb * 0.75)
             max_memory[i] = f"{model_limit_gb}GiB"
-        # CPU fallback so no weights end up on meta device
-        max_memory["cpu"] = "24GiB"
-
         dm = "balanced_low_0" if self.device_map == "auto" else self.device_map
         print(f"  Multi-GPU detected ({gpu_count} GPUs) - using device_map='{dm}'")
         print(f"  Per-GPU memory limits: {max_memory}")
