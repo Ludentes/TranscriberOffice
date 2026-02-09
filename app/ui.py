@@ -56,7 +56,7 @@ def process_audio_stream(audio_path: Optional[str], hotwords: str) -> Generator[
                         "segments": final_result.segments,
                         "full_text": final_result.full_text
                     }
-                    yield output_text, json.dumps(json_response, indent=2)
+                    yield output_text, json.dumps(json_response, indent=2, ensure_ascii=False)
 
     except Exception as e:
         error_msg = f"Service error: {str(e)}"
