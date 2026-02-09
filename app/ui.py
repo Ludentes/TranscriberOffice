@@ -7,9 +7,6 @@ import gradio as gr
 
 from app.transcribe import get_transcription_service
 
-import inspect
-_textbox_supports_copy = "show_copy_button" in inspect.signature(gr.Textbox.__init__).parameters
-
 
 def process_audio_stream(audio_path: Optional[str], hotwords: str) -> Generator[tuple[str, str], None, None]:
     """Process uploaded audio with streaming output.
@@ -67,20 +64,30 @@ def process_audio_stream(audio_path: Optional[str], hotwords: str) -> Generator[
 
 
 def extract_text_only(transcript: str) -> str:
-    """Strip speaker tags, timestamps, and quotes — return just the spoken text."""
+    """Strip speaker tags, timestamps, and quotes — return just the spoken text.
+
+    Only processes final transcript format (lines with [Speaker] headers and quoted text).
+    If the text doesn't look like a final transcript, returns a message to wait.
+    """
     if not transcript:
         return ""
+
+    # Check if this looks like a final transcript (has [Speaker] lines)
+    if "[Speaker" not in transcript and "[speaker" not in transcript.lower():
+        return "(Transcription still in progress — wait for it to finish)"
+
     lines = transcript.split("\n")
     text_lines = []
     for line in lines:
         line = line.strip()
-        # Skip speaker/timestamp lines like [Speaker 1] 00:00:05 - 00:00:12
+        # Skip speaker/timestamp lines, status lines, and empty lines
         if line.startswith("[") or line.startswith("---") or not line:
             continue
         # Strip surrounding quotes
         if line.startswith('"') and line.endswith('"'):
             line = line[1:-1]
-        text_lines.append(line)
+        if line:
+            text_lines.append(line)
     return "\n".join(text_lines)
 
 
@@ -110,27 +117,23 @@ def create_ui() -> gr.Blocks:
                     stop_btn = gr.Button("Stop", variant="stop")
 
             with gr.Column(scale=2):
-                copy_kwargs = {"show_copy_button": True} if _textbox_supports_copy else {}
-
                 with gr.Tab("Transcript"):
                     text_output = gr.Textbox(
                         label="Transcription",
-                        lines=20,
-                        **copy_kwargs
+                        lines=20
                     )
-                    copy_text_btn = gr.Button("Copy Text Only (no timestamps/speakers)", size="sm")
+                    copy_text_btn = gr.Button("Extract Text Only (no timestamps/speakers)", size="sm")
                     text_only_output = gr.Textbox(
-                        label="Text Only",
+                        label="Text Only (use the select-all and copy, or the copy button if available)",
                         lines=10,
-                        visible=False,
-                        **copy_kwargs
+                        visible=False
                     )
 
                 with gr.Tab("JSON"):
-                    json_output = gr.Textbox(
+                    json_output = gr.Code(
                         label="JSON Output",
-                        lines=20,
-                        **copy_kwargs
+                        language="json",
+                        lines=20
                     )
 
         with gr.Row():
@@ -156,7 +159,7 @@ def create_ui() -> gr.Blocks:
             cleaned = extract_text_only(transcript)
             return gr.update(value=cleaned, visible=True)
 
-        # Copy Text Only button
+        # Extract Text Only button
         copy_text_btn.click(
             fn=show_text_only,
             inputs=[text_output],
