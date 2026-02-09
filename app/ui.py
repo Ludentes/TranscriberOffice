@@ -1,6 +1,7 @@
 # app/ui.py
 """Gradio web interface for transcription."""
 import json
+import re
 from typing import Optional, Generator
 
 import gradio as gr
@@ -85,16 +86,11 @@ def extract_text_only(transcript: str) -> str:
     if text.startswith("assistant"):
         text = text[len("assistant"):].strip()
 
-    # Try parsing as JSON array (raw streaming output)
-    if text.startswith("["):
-        try:
-            segments = json.loads(text)
-            if isinstance(segments, list) and segments:
-                contents = [seg.get("Content", "") for seg in segments if isinstance(seg, dict)]
-                if any(contents):
-                    return "\n".join(c for c in contents if c)
-        except (json.JSONDecodeError, TypeError):
-            pass
+    # Extract Content values from JSON (works on incomplete/streaming JSON too)
+    if '"Content"' in text:
+        contents = re.findall(r'"Content"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
+        if contents:
+            return "\n".join(contents)
 
     # Final formatted transcript: skip [Speaker] and --- lines, strip quotes
     if "[Speaker" in text or "[speaker" in text.lower():
