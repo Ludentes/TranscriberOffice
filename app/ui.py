@@ -119,14 +119,17 @@ def create_ui() -> gr.Blocks:
             with gr.Column(scale=2):
                 with gr.Tab("Transcript"):
                     text_output = gr.Textbox(
-                        label="Transcription",
+                        label="Transcription (live)",
                         lines=20
                     )
-                    copy_text_btn = gr.Button("Extract Text Only (no timestamps/speakers)", size="sm")
-                    text_only_output = gr.Textbox(
-                        label="Text Only (use the select-all and copy, or the copy button if available)",
-                        lines=10,
-                        visible=False
+                    with gr.Row():
+                        snapshot_btn = gr.Button("Snapshot Full Transcript", size="sm")
+                        snapshot_text_btn = gr.Button("Snapshot Text Only", size="sm")
+                    snapshot_output = gr.Textbox(
+                        label="Snapshot (select and copy from here)",
+                        lines=15,
+                        visible=False,
+                        interactive=False
                     )
 
                 with gr.Tab("JSON"):
@@ -154,16 +157,25 @@ def create_ui() -> gr.Blocks:
             set_stop_flag(False)  # Reset flag
             yield from process_audio_stream(audio, hotwords)
 
-        def show_text_only(transcript):
-            """Extract text only and show it."""
+        def snapshot_full(transcript):
+            """Snapshot current transcript to a non-streaming textbox."""
+            return gr.update(value=transcript, visible=True)
+
+        def snapshot_text(transcript):
+            """Snapshot text-only version to a non-streaming textbox."""
             cleaned = extract_text_only(transcript)
             return gr.update(value=cleaned, visible=True)
 
-        # Extract Text Only button
-        copy_text_btn.click(
-            fn=show_text_only,
+        # Snapshot buttons — freeze current text into a copyable textbox
+        snapshot_btn.click(
+            fn=snapshot_full,
             inputs=[text_output],
-            outputs=[text_only_output],
+            outputs=[snapshot_output],
+        )
+        snapshot_text_btn.click(
+            fn=snapshot_text,
+            inputs=[text_output],
+            outputs=[snapshot_output],
         )
 
         # Connect the buttons
