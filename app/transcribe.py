@@ -257,18 +257,36 @@ class TranscriptionService:
                         device_map[key] = embed_device
                         moved.append(key)
 
-            # Compensate: move highest-numbered LM layers from embed_device to other GPU
-            if moved:
-                other_device = 1 - embed_device
-                lm_on_embed = sorted(
-                    [k for k, v in device_map.items()
-                     if k.startswith('model.language_model.layers.') and v == embed_device],
-                    key=lambda x: int(x.rsplit('.', 1)[-1]),
-                    reverse=True  # Move highest layers first (closest to output)
-                )
-                # Move layers to compensate for the audio modules we pulled in
-                for layer in lm_on_embed[:len(moved)]:
-                    device_map[layer] = other_device
+            # Rebalance by parameter bytes: move LM layers until both GPUs are ~equal
+            def _param_bytes_for_device(dev):
+                total = 0
+                for name, param in self.model.named_parameters():
+                    # Find which device_map entry owns this parameter
+                    module_name = name.rsplit('.', 1)[0]  # Remove .weight/.bias
+                    while module_name and module_name not in device_map:
+                        module_name = module_name.rsplit('.', 1)[0] if '.' in module_name else ''
+                    if module_name and device_map.get(module_name) == dev:
+                        total += param.numel() * param.element_size()
+                return total
+
+            other_device = 1 - embed_device
+            lm_on_embed = sorted(
+                [k for k, v in device_map.items()
+                 if k.startswith('model.language_model.layers.') and v == embed_device],
+                key=lambda x: int(x.rsplit('.', 1)[-1]),
+                reverse=True  # Move highest layers first
+            )
+            # Move layers until device 0 is under 50% of total
+            for layer in lm_on_embed:
+                bytes_0 = _param_bytes_for_device(embed_device)
+                bytes_1 = _param_bytes_for_device(other_device)
+                if bytes_0 <= bytes_1:
+                    break
+                device_map[layer] = other_device
+
+            bytes_0 = _param_bytes_for_device(embed_device) / (1024**3)
+            bytes_1 = _param_bytes_for_device(other_device) / (1024**3)
+            print(f"  Model weight balance: device 0 = {bytes_0:.1f}GB, device 1 = {bytes_1:.1f}GB")
 
             from collections import Counter
             layer_distribution = Counter(device_map.values())
