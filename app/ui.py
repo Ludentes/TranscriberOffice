@@ -7,6 +7,9 @@ import gradio as gr
 
 from app.transcribe import get_transcription_service
 
+import inspect
+_textbox_supports_copy = "show_copy_button" in inspect.signature(gr.Textbox.__init__).parameters
+
 
 def process_audio_stream(audio_path: Optional[str], hotwords: str) -> Generator[tuple[str, str], None, None]:
     """Process uploaded audio with streaming output.
@@ -107,25 +110,27 @@ def create_ui() -> gr.Blocks:
                     stop_btn = gr.Button("Stop", variant="stop")
 
             with gr.Column(scale=2):
+                copy_kwargs = {"show_copy_button": True} if _textbox_supports_copy else {}
+
                 with gr.Tab("Transcript"):
                     text_output = gr.Textbox(
                         label="Transcription",
                         lines=20,
-                        show_copy_button=True
+                        **copy_kwargs
                     )
                     copy_text_btn = gr.Button("Copy Text Only (no timestamps/speakers)", size="sm")
                     text_only_output = gr.Textbox(
                         label="Text Only",
                         lines=10,
-                        show_copy_button=True,
-                        visible=False
+                        visible=False,
+                        **copy_kwargs
                     )
 
                 with gr.Tab("JSON"):
                     json_output = gr.Textbox(
                         label="JSON Output",
                         lines=20,
-                        show_copy_button=True
+                        **copy_kwargs
                     )
 
         with gr.Row():
