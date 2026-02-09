@@ -193,7 +193,7 @@ class TranscriptionService:
             return
 
         # Determine if we should use device_map for multi-GPU
-        use_device_map = self._resolve_device_map()
+        use_device_map, max_memory = self._resolve_device_map()
 
         print(f"Loading model: {self.model_path}")
         print(f"Device: {self.device}, dtype: {self.dtype}, device_map: {use_device_map or 'none'}")
@@ -217,6 +217,8 @@ class TranscriptionService:
             )
             if use_device_map:
                 model_kwargs["device_map"] = use_device_map
+                if max_memory:
+                    model_kwargs["max_memory"] = max_memory
                 self._using_device_map = True
 
             self.model = VibeVoiceASRForConditionalGeneration.from_pretrained(
@@ -241,24 +243,35 @@ class TranscriptionService:
         if self._using_device_map:
             print(f"Model distributed across devices: {set(str(p.device) for p in self.model.parameters())}")
 
-    def _resolve_device_map(self) -> Optional[str]:
-        """Determine whether to use device_map for model loading."""
+    def _resolve_device_map(self) -> tuple[Optional[str], Optional[dict]]:
+        """Determine whether to use device_map for model loading.
+
+        Returns:
+            (device_map, max_memory) - device_map string and optional per-GPU memory limits
+        """
         if self.device_map == "single":
-            return None
+            return None, None
 
         gpu_count = torch.cuda.device_count()
 
-        if self.device_map == "auto":
-            if gpu_count >= 2:
-                print(f"  Multi-GPU detected ({gpu_count} GPUs) - using device_map='balanced_low_0'")
-                return "balanced_low_0"
-            return None
+        if gpu_count < 2:
+            if self.device_map not in ("auto", "single"):
+                print(f"  Warning: device_map='{self.device_map}' requested but only {gpu_count} GPU(s) found, ignoring")
+            return None, None
 
-        # Explicit device_map value (e.g. "balanced", "balanced_low_0", "sequential")
-        if gpu_count >= 2:
-            return self.device_map
-        print(f"  Warning: device_map='{self.device_map}' requested but only {gpu_count} GPU(s) found, ignoring")
-        return None
+        # Multiple GPUs available - force model to split across them
+        # Reserve ~40% of each GPU for inference activations
+        max_memory = {}
+        for i in range(gpu_count):
+            total_gb = torch.cuda.get_device_properties(i).total_memory / (1024**3)
+            # Use 60% for model weights, leave 40% for activations
+            model_limit_gb = int(total_gb * 0.6)
+            max_memory[i] = f"{model_limit_gb}GiB"
+
+        dm = "balanced_low_0" if self.device_map == "auto" else self.device_map
+        print(f"  Multi-GPU detected ({gpu_count} GPUs) - using device_map='{dm}'")
+        print(f"  Per-GPU memory limits: {max_memory}")
+        return dm, max_memory
 
     @property
     def input_device(self) -> str:
