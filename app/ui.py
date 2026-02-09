@@ -66,29 +66,52 @@ def process_audio_stream(audio_path: Optional[str], hotwords: str) -> Generator[
 def extract_text_only(transcript: str) -> str:
     """Strip speaker tags, timestamps, and quotes — return just the spoken text.
 
-    Only processes final transcript format (lines with [Speaker] headers and quoted text).
-    If the text doesn't look like a final transcript, returns a message to wait.
+    Handles both:
+    - Final formatted transcript: [Speaker 1] 00:00:05 - 00:00:12 / "text"
+    - Raw streaming JSON: [{"Start":0,"End":39,"Speaker":0,"Content":"text"}, ...]
     """
     if not transcript:
         return ""
 
-    # Check if this looks like a final transcript (has [Speaker] lines)
-    if "[Speaker" not in transcript and "[speaker" not in transcript.lower():
-        return "(Transcription still in progress — wait for it to finish)"
+    text = transcript.strip()
 
-    lines = transcript.split("\n")
-    text_lines = []
-    for line in lines:
-        line = line.strip()
-        # Skip speaker/timestamp lines, status lines, and empty lines
-        if line.startswith("[") or line.startswith("---") or not line:
-            continue
-        # Strip surrounding quotes
-        if line.startswith('"') and line.endswith('"'):
-            line = line[1:-1]
-        if line:
-            text_lines.append(line)
-    return "\n".join(text_lines)
+    # Strip leading status line like "--- Generating (594 tokens, 15.3s) ---"
+    if text.startswith("---"):
+        newline = text.find("\n")
+        if newline != -1:
+            text = text[newline + 1:].strip()
+
+    # Strip "assistant" prefix from chat template
+    if text.startswith("assistant"):
+        text = text[len("assistant"):].strip()
+
+    # Try parsing as JSON array (raw streaming output)
+    if text.startswith("["):
+        try:
+            segments = json.loads(text)
+            if isinstance(segments, list) and segments:
+                contents = [seg.get("Content", "") for seg in segments if isinstance(seg, dict)]
+                if any(contents):
+                    return "\n".join(c for c in contents if c)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    # Final formatted transcript: skip [Speaker] and --- lines, strip quotes
+    if "[Speaker" in text or "[speaker" in text.lower():
+        lines = text.split("\n")
+        text_lines = []
+        for line in lines:
+            line = line.strip()
+            if line.startswith("[") or line.startswith("---") or not line:
+                continue
+            if line.startswith('"') and line.endswith('"'):
+                line = line[1:-1]
+            if line:
+                text_lines.append(line)
+        return "\n".join(text_lines)
+
+    # Fallback: return as-is (minus status/assistant prefix already stripped)
+    return text
 
 
 def create_ui() -> gr.Blocks:
