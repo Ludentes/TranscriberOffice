@@ -240,6 +240,16 @@ class TranscriptionService:
                 self.model,
                 max_memory=max_memory_bytes
             )
+
+            # Keep audio tokenizers/connectors on the same device as embed_tokens
+            # to avoid cross-device indexing errors during audio encoding
+            embed_device = device_map.get('model.language_model.embed_tokens', 0)
+            audio_modules = ['acoustic_tokenizer', 'semantic_tokenizer',
+                             'acoustic_connector', 'semantic_connector']
+            for key in device_map:
+                if any(m in key for m in audio_modules):
+                    device_map[key] = embed_device
+
             # Log the split
             from collections import Counter
             layer_distribution = Counter(device_map.values())
