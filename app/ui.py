@@ -19,7 +19,7 @@ def process_audio_stream(audio_path: Optional[str], hotwords: str) -> Generator[
         Tuples of (formatted_text, json_string)
     """
     if not audio_path:
-        yield "Please upload an audio file.", json.dumps({"success": False, "error": "No audio file uploaded"}, indent=2)
+        yield "Please upload an audio file.", json.dumps({"success": False, "error": "No audio file uploaded"}, indent=2, ensure_ascii=False)
         return
 
     try:
@@ -32,7 +32,7 @@ def process_audio_stream(audio_path: Optional[str], hotwords: str) -> Generator[
         ):
             if final_result is None:
                 # Still generating - show partial output
-                yield partial_text, json.dumps({"status": "generating..."}, indent=2)
+                yield partial_text, json.dumps({"status": "generating..."}, indent=2, ensure_ascii=False)
             else:
                 # Final result
                 if not final_result.success:
@@ -41,7 +41,7 @@ def process_audio_stream(audio_path: Optional[str], hotwords: str) -> Generator[
                         "success": False,
                         "error": final_result.error,
                         "processing_time_seconds": round(final_result.processing_time_seconds, 2)
-                    }, indent=2)
+                    }, indent=2, ensure_ascii=False)
                     yield error_msg, error_json
                 else:
                     # Add processing time to output
@@ -60,7 +60,25 @@ def process_audio_stream(audio_path: Optional[str], hotwords: str) -> Generator[
 
     except Exception as e:
         error_msg = f"Service error: {str(e)}"
-        yield error_msg, json.dumps({"success": False, "error": str(e)}, indent=2)
+        yield error_msg, json.dumps({"success": False, "error": str(e)}, indent=2, ensure_ascii=False)
+
+
+def extract_text_only(transcript: str) -> str:
+    """Strip speaker tags, timestamps, and quotes — return just the spoken text."""
+    if not transcript:
+        return ""
+    lines = transcript.split("\n")
+    text_lines = []
+    for line in lines:
+        line = line.strip()
+        # Skip speaker/timestamp lines like [Speaker 1] 00:00:05 - 00:00:12
+        if line.startswith("[") or line.startswith("---") or not line:
+            continue
+        # Strip surrounding quotes
+        if line.startswith('"') and line.endswith('"'):
+            line = line[1:-1]
+        text_lines.append(line)
+    return "\n".join(text_lines)
 
 
 def create_ui() -> gr.Blocks:
@@ -92,17 +110,22 @@ def create_ui() -> gr.Blocks:
                 with gr.Tab("Transcript"):
                     text_output = gr.Textbox(
                         label="Transcription",
-                        lines=20
+                        lines=20,
+                        show_copy_button=True
                     )
-                    with gr.Row():
-                        copy_btn = gr.Button("Copy Full Transcript", size="sm")
-                        copy_text_btn = gr.Button("Copy Text Only", size="sm")
+                    copy_text_btn = gr.Button("Copy Text Only (no timestamps/speakers)", size="sm")
+                    text_only_output = gr.Textbox(
+                        label="Text Only",
+                        lines=10,
+                        show_copy_button=True,
+                        visible=False
+                    )
 
                 with gr.Tab("JSON"):
-                    json_output = gr.Code(
+                    json_output = gr.Textbox(
                         label="JSON Output",
-                        language="json",
-                        lines=20
+                        lines=20,
+                        show_copy_button=True
                     )
 
         with gr.Row():
@@ -123,23 +146,16 @@ def create_ui() -> gr.Blocks:
             set_stop_flag(False)  # Reset flag
             yield from process_audio_stream(audio, hotwords)
 
-        # Copy buttons use JavaScript to write to clipboard
-        copy_btn.click(
-            fn=None,
-            inputs=[text_output],
-            js="(text) => { navigator.clipboard.writeText(text); }",
-        )
+        def show_text_only(transcript):
+            """Extract text only and show it."""
+            cleaned = extract_text_only(transcript)
+            return gr.update(value=cleaned, visible=True)
+
+        # Copy Text Only button
         copy_text_btn.click(
-            fn=None,
+            fn=show_text_only,
             inputs=[text_output],
-            js="""(text) => {
-                const lines = text.split('\\n');
-                const textOnly = lines
-                    .filter(l => l.startsWith('"') || (l.length > 0 && !l.startsWith('[') && !l.startsWith('---')))
-                    .map(l => l.replace(/^"|"$/g, ''))
-                    .join('\\n');
-                navigator.clipboard.writeText(textOnly);
-            }""",
+            outputs=[text_only_output],
         )
 
         # Connect the buttons
