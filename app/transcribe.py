@@ -209,21 +209,12 @@ class TranscriptionService:
                 trust_remote_code=True
             )
 
-            model_kwargs = dict(
+            self.model = VibeVoiceASRForConditionalGeneration.from_pretrained(
+                self.model_path,
                 dtype=self.dtype,
                 cache_dir=self.cache_dir,
                 attn_implementation=self.attn_implementation,
                 trust_remote_code=True
-            )
-            if use_device_map:
-                model_kwargs["device_map"] = use_device_map
-                if max_memory:
-                    model_kwargs["max_memory"] = max_memory
-                self._using_device_map = True
-
-            self.model = VibeVoiceASRForConditionalGeneration.from_pretrained(
-                self.model_path,
-                **model_kwargs
             )
         except ImportError as e:
             raise ImportError(
@@ -232,8 +223,26 @@ class TranscriptionService:
                 f"Error: {e}"
             )
 
-        # Only manually move to device if not using device_map
-        if not self._using_device_map:
+        # Distribute model across GPUs using accelerate directly
+        # (VibeVoice's from_pretrained ignores device_map kwargs)
+        if use_device_map and max_memory:
+            from accelerate import infer_auto_device_map, dispatch_model
+            from accelerate.utils import get_balanced_memory
+
+            print("Distributing model across GPUs with accelerate...")
+            max_memory = get_balanced_memory(
+                self.model,
+                max_memory=max_memory,
+                low_zero=(use_device_map == "balanced_low_0")
+            )
+            print(f"  Balanced memory allocation: {max_memory}")
+            device_map = infer_auto_device_map(
+                self.model,
+                max_memory=max_memory
+            )
+            self.model = dispatch_model(self.model, device_map=device_map)
+            self._using_device_map = True
+        else:
             self.model = self.model.to(self.device)
 
         self.model.eval()
@@ -244,8 +253,8 @@ class TranscriptionService:
             from collections import Counter
             device_counts = Counter(str(p.device) for p in self.model.parameters())
             print(f"Model parameter distribution: {dict(device_counts)}")
-            if "meta" in str(device_counts):
-                print("WARNING: Some parameters are on 'meta' device (not materialized). "
+            if any("meta" in dev for dev in device_counts):
+                print("ERROR: Some parameters are on 'meta' device (not materialized). "
                       "Increase max_memory limits or use fewer GPUs.")
 
     def _resolve_device_map(self) -> tuple[Optional[str], Optional[dict]]:
