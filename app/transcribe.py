@@ -276,14 +276,17 @@ def split_audio(
         if chunk_duration < 1:  # Skip tiny chunks
             continue
 
-        chunk_path = os.path.join(tempfile.gettempdir(), f"chunk_{os.getpid()}_{i}.mp3")
+        chunk_path = os.path.join(tempfile.gettempdir(), f"chunk_{os.getpid()}_{i}.wav")
 
+        # Downsample to 24kHz mono WAV so the model processor skips resampling
         subprocess.run([
             "ffmpeg", "-y",
             "-ss", str(start),
             "-t", str(chunk_duration),
             "-i", audio_path,
-            "-c", "copy",
+            "-ac", "1",           # mono
+            "-ar", "24000",       # 24kHz (VibeVoice target sample rate)
+            "-c:a", "pcm_s16le", # 16-bit PCM WAV
             chunk_path
         ], check=True, capture_output=True)
 
@@ -433,6 +436,15 @@ class TranscriptionService:
             self.model = self.model.to(self.device)
 
         self.model.eval()
+
+        # Compile model for faster inference (first call has ~30s warmup cost)
+        if isinstance(self.model, torch.nn.Module):
+            try:
+                self.model = torch.compile(self.model)
+                print("torch.compile() applied successfully")
+            except Exception as e:
+                print(f"torch.compile() skipped: {e}")
+
         self._loaded = True
         self.current_model_path = self.model_path
         print("Model loaded successfully")
@@ -831,7 +843,7 @@ class TranscriptionService:
 
         def generate_thread():
             try:
-                with torch.no_grad():
+                with torch.inference_mode():
                     self.model.generate(
                         **inputs,
                         max_new_tokens=max_new_tokens,
