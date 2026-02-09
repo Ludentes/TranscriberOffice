@@ -260,13 +260,15 @@ class TranscriptionService:
             return None, None
 
         # Multiple GPUs available - force model to split across them
-        # Reserve ~40% of each GPU for inference activations
+        # Reserve ~25% of each GPU for inference activations
         max_memory = {}
         for i in range(gpu_count):
             total_gb = torch.cuda.get_device_properties(i).total_memory / (1024**3)
-            # Use 60% for model weights, leave 40% for activations
-            model_limit_gb = int(total_gb * 0.6)
+            # Use 75% for model weights, leave 25% for activations
+            model_limit_gb = int(total_gb * 0.75)
             max_memory[i] = f"{model_limit_gb}GiB"
+        # CPU fallback so no weights end up on meta device
+        max_memory["cpu"] = "24GiB"
 
         dm = "balanced_low_0" if self.device_map == "auto" else self.device_map
         print(f"  Multi-GPU detected ({gpu_count} GPUs) - using device_map='{dm}'")
