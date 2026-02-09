@@ -603,6 +603,9 @@ class TranscriptionService:
                     )
             except Exception as e:
                 result_container["error"] = str(e)
+                print(f"ERROR in generation thread: {e}")
+                # Unblock the streamer so the main thread doesn't hang forever
+                streamer.text_queue.put(streamer.stop_signal)
 
         # Start generation in background thread
         thread = threading.Thread(target=generate_thread)
