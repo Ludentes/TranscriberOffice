@@ -125,7 +125,8 @@ def create_ui() -> gr.Blocks:
         transcribe_btn.click(
             fn=start_transcription,
             inputs=[audio_input, hotwords_input],
-            outputs=[text_output, json_output]
+            outputs=[text_output, json_output],
+            concurrency_limit=1,  # Only one transcription at a time (GPU constraint)
         )
 
     return demo
