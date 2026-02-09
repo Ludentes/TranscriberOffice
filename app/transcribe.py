@@ -226,34 +226,52 @@ class TranscriptionService:
         # Distribute model across GPUs using accelerate directly
         # (VibeVoice's from_pretrained ignores device_map kwargs)
         if use_device_map and max_memory:
-            from accelerate import infer_auto_device_map, dispatch_model
-
-            # Convert max_memory strings to bytes for infer_auto_device_map
-            max_memory_bytes = {}
-            for k, v in max_memory.items():
-                gb = int(v.replace("GiB", ""))
-                max_memory_bytes[k] = gb * (1024**3)
+            from accelerate import dispatch_model
 
             print(f"Distributing model across GPUs with accelerate...")
-            print(f"  Max memory per GPU: {max_memory}")
-            device_map = infer_auto_device_map(
-                self.model,
-                max_memory=max_memory_bytes
-            )
+            gpu_count = torch.cuda.device_count()
 
-            # Keep audio tokenizers/connectors on the same device as embed_tokens
-            # to avoid cross-device indexing errors during audio encoding
-            embed_device = device_map.get('model.language_model.embed_tokens', 0)
-            audio_modules = ['acoustic_tokenizer', 'semantic_tokenizer',
-                             'acoustic_connector', 'semantic_connector']
-            for key in device_map:
-                if any(m in key for m in audio_modules):
-                    device_map[key] = embed_device
+            # Build device map manually for proper balance:
+            # - Audio tokenizers/connectors + embed_tokens → device 0 (must be colocated)
+            # - Language model layers → split across all GPUs
+            # - lm_head → last GPU
+            device_map = {}
+            lm_layers = []
+            audio_modules = []
+            for name, _ in self.model.named_modules():
+                if name == '':
+                    continue
+                # Only map top-level and second-level modules
+                parts = name.split('.')
+                if len(parts) > 3:
+                    continue
 
-            # Log the split
+                if 'acoustic' in name or 'semantic' in name:
+                    # Audio tokenizers and connectors must be with embed_tokens
+                    device_map[name] = 0
+                    audio_modules.append(name)
+                elif name == 'model.language_model.embed_tokens':
+                    device_map[name] = 0
+                elif name == 'lm_head':
+                    device_map[name] = gpu_count - 1
+                elif name.startswith('model.language_model.layers.'):
+                    lm_layers.append(name)
+                elif name == 'model.language_model.norm':
+                    device_map[name] = gpu_count - 1
+
+            # Split language model layers evenly, but put fewer on device 0
+            # since it also holds the audio tokenizers
+            # Give device 0 roughly 1/3 of LM layers, rest to device 1
+            lm_layers.sort(key=lambda x: int(x.split('.')[-1]))
+            split_point = len(lm_layers) // 3
+            for i, layer_name in enumerate(lm_layers):
+                device_map[layer_name] = 0 if i < split_point else 1
+
             from collections import Counter
             layer_distribution = Counter(device_map.values())
-            print(f"  Device map: {dict(layer_distribution)} layers per device")
+            print(f"  Audio modules on device 0: {audio_modules}")
+            print(f"  LM layers: {split_point}/{len(lm_layers)} on device 0, rest on device 1")
+            print(f"  Total layers per device: {dict(layer_distribution)}")
             self.model = dispatch_model(self.model, device_map=device_map)
             self._using_device_map = True
         else:
