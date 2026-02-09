@@ -260,6 +260,12 @@ class TranscriptionService:
             if any("meta" in dev for dev in device_counts):
                 print("ERROR: Some parameters are on 'meta' device (not materialized). "
                       "Increase max_memory limits or use fewer GPUs.")
+            if hasattr(self.model, 'hf_device_map'):
+                print(f"Input device: {self.input_device}")
+                # Show first few entries of device map for debugging
+                items = list(self.model.hf_device_map.items())
+                print(f"  First 5 layer mappings: {dict(items[:5])}")
+                print(f"  Last 5 layer mappings: {dict(items[-5:])}")
 
     def _resolve_device_map(self) -> tuple[Optional[str], Optional[dict]]:
         """Determine whether to use device_map for model loading.
@@ -291,10 +297,14 @@ class TranscriptionService:
         return dm, max_memory
 
     @property
-    def input_device(self) -> str:
+    def input_device(self):
         """Get the device to place input tensors on."""
         if self._using_device_map and self.model is not None:
-            # When using device_map, inputs go to the first module's device
+            # When using dispatch_model, use the hf_device_map to find
+            # the device of the first module in execution order
+            if hasattr(self.model, 'hf_device_map'):
+                first_device = next(iter(self.model.hf_device_map.values()))
+                return torch.device(first_device)
             return next(iter(self.model.parameters())).device
         return self.device
 
