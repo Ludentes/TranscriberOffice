@@ -15,10 +15,15 @@ def test_split_audio_creates_chunks():
         with patch('subprocess.run') as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
 
-            chunks = split_audio("/fake/audio.mp3", chunk_minutes=3)
+            chunks = split_audio("/fake/audio.mp3", chunk_minutes=3, silence_split=False)
 
             # 7 minutes / 3 minutes per chunk = 3 chunks (0-3, 2:50-5:50, 5:40-7:00)
             assert len(chunks) >= 2
+
+            # Return type is list of (path, start_time) tuples
+            for chunk_path, start_time in chunks:
+                assert isinstance(chunk_path, str)
+                assert isinstance(start_time, float)
 
             # Verify ffmpeg was called
             assert mock_run.call_count >= 2
@@ -56,6 +61,10 @@ def _mock_config(threshold=5, chunk_size=3, overlap=10):
     mock_cfg.transcription.chunk_threshold_minutes = threshold
     mock_cfg.transcription.chunk_size_minutes = chunk_size
     mock_cfg.transcription.chunk_overlap_seconds = overlap
+    mock_cfg.transcription.silence_split = True
+    mock_cfg.transcription.silence_noise_db = -30
+    mock_cfg.transcription.silence_min_duration = 0.5
+    mock_cfg.transcription.silence_search_window = 30
     return mock_cfg
 
 
@@ -68,7 +77,7 @@ def test_transcribe_stream_chunks_large_audio():
     # Mock librosa to return 7 minutes (above 5-min threshold)
     with patch('librosa.get_duration', return_value=420.0), \
          patch('app.transcribe.get_config', return_value=_mock_config(threshold=5)), \
-         patch('app.transcribe.split_audio', return_value=["/chunk1.mp3", "/chunk2.mp3"]):
+         patch('app.transcribe.split_audio', return_value=[("/chunk1.mp3", 0.0), ("/chunk2.mp3", 170.0)]):
             # Mock _transcribe_single_stream to return a simple result
             mock_result = TranscriptionResult(
                 success=True,

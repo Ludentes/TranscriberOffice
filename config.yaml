@@ -24,4 +24,9 @@ transcription:
   # Set to 0 for auto-calculation based on GPU memory
   chunk_threshold_minutes: 0  # 0 = auto, or minutes before splitting
   chunk_size_minutes: 0  # 0 = auto, or chunk duration in minutes
-  chunk_overlap_seconds: 10  # Overlap between chunks to prevent missing words
+  chunk_overlap_seconds: 10  # Overlap between chunks (only used when no silence found)
+  # Silence-based splitting (splits at natural pauses instead of fixed intervals)
+  silence_split: true           # Enable silence-based splitting
+  silence_noise_db: -30         # dB threshold for silence detection
+  silence_min_duration: 0.5     # Minimum silence length in seconds
+  silence_search_window: 30     # Seconds around target boundary to search for silence

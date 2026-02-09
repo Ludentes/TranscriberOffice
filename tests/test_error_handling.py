@@ -39,13 +39,17 @@ def test_progress_messages_during_chunking():
     mock_cfg.transcription.chunk_threshold_minutes = 5
     mock_cfg.transcription.chunk_size_minutes = 3
     mock_cfg.transcription.chunk_overlap_seconds = 10
+    mock_cfg.transcription.silence_split = True
+    mock_cfg.transcription.silence_noise_db = -30
+    mock_cfg.transcription.silence_min_duration = 0.5
+    mock_cfg.transcription.silence_search_window = 30
 
     service = TranscriptionService()
     service._loaded = True
 
     with patch('librosa.get_duration', return_value=420.0), \
          patch('app.transcribe.get_config', return_value=mock_cfg), \
-         patch('app.transcribe.split_audio', return_value=["/chunk1.mp3", "/chunk2.mp3"]):
+         patch('app.transcribe.split_audio', return_value=[("/chunk1.mp3", 0.0), ("/chunk2.mp3", 170.0)]):
             with patch.object(service, '_transcribe_single_stream', return_value=iter([
                 ("result", Mock(segments=[], success=True))
             ])):
@@ -53,8 +57,8 @@ def test_progress_messages_during_chunking():
 
                 messages = [r[0] for r in results]
 
-                # Should mention splitting
-                assert any("splitting" in str(m).lower() for m in messages)
+                # Should mention split/splitting/silence
+                assert any("split" in str(m).lower() or "silence" in str(m).lower() for m in messages)
 
                 # Should mention chunk progress
                 assert any("chunk" in str(m).lower() for m in messages)

@@ -119,41 +119,175 @@ def parse_model_output(raw_output: str) -> list[dict]:
     return segments
 
 
-def split_audio(audio_path: str, chunk_minutes: int = 3, overlap_seconds: int = 10) -> list[str]:
-    """Split audio into chunks using ffmpeg.
+def detect_silences(
+    audio_path: str,
+    noise_db: int = -30,
+    min_duration: float = 0.5
+) -> list[tuple[float, float]]:
+    """Detect silence periods in audio using ffmpeg silencedetect.
+
+    Returns:
+        List of (silence_start, silence_end) tuples in seconds.
+        Empty list if detection fails or no silences found.
+    """
+    try:
+        result = subprocess.run([
+            "ffmpeg", "-i", audio_path,
+            "-af", f"silencedetect=noise={noise_db}dB:d={min_duration}",
+            "-f", "null", "-"
+        ], capture_output=True, text=True)
+
+        stderr = result.stderr
+        start_pattern = re.compile(r'silence_start:\s*([\d.]+)')
+        end_pattern = re.compile(r'silence_end:\s*([\d.]+)')
+
+        starts = [float(m.group(1)) for m in start_pattern.finditer(stderr)]
+        ends = [float(m.group(1)) for m in end_pattern.finditer(stderr)]
+
+        # Pair starts with ends
+        silences = list(zip(starts, ends[:len(starts)]))
+        print(f"Silence detection: found {len(silences)} silence periods")
+        return silences
+
+    except Exception as e:
+        print(f"Warning: silence detection failed: {e}")
+        return []
+
+
+def select_split_points(
+    silences: list[tuple[float, float]],
+    total_duration: float,
+    target_chunk_seconds: float,
+    search_window: float = 30.0
+) -> list[float]:
+    """Select split points at silences nearest to target boundaries.
+
+    For each target boundary (N * target_chunk_seconds), picks the nearest
+    silence midpoint within the search window. Falls back to the exact
+    target time if no silence is nearby.
+
+    Returns:
+        Sorted list of split times in seconds.
+    """
+    if target_chunk_seconds <= 0 or total_duration <= target_chunk_seconds:
+        return []
+
+    # Compute target boundaries
+    num_chunks = int(total_duration / target_chunk_seconds)
+    targets = [target_chunk_seconds * i for i in range(1, num_chunks + 1)]
+    # Remove targets past the audio
+    targets = [t for t in targets if t < total_duration]
+
+    if not targets:
+        return []
+
+    # Compute silence midpoints
+    midpoints = [(s + e) / 2 for s, e in silences]
+
+    split_points = []
+    for target in targets:
+        if midpoints:
+            # Find midpoints within search window
+            candidates = [(m, abs(m - target)) for m in midpoints if abs(m - target) <= search_window]
+            if candidates:
+                best = min(candidates, key=lambda x: x[1])[0]
+                split_points.append(best)
+                continue
+        # Fallback: use exact target
+        split_points.append(target)
+
+    # Remove points too close to start or end (< 30s)
+    split_points = [p for p in split_points if p > 30 and p < total_duration - 30]
+
+    # Merge points that are too close together (< 30s apart)
+    if len(split_points) > 1:
+        merged = [split_points[0]]
+        for p in split_points[1:]:
+            if p - merged[-1] >= 30:
+                merged.append(p)
+        split_points = merged
+
+    split_points.sort()
+    return split_points
+
+
+def split_audio(
+    audio_path: str,
+    chunk_minutes: int = 3,
+    overlap_seconds: int = 10,
+    silence_split: bool = True,
+    silence_noise_db: int = -30,
+    silence_min_duration: float = 0.5,
+    silence_search_window: int = 30,
+) -> list[tuple[str, float]]:
+    """Split audio into chunks using ffmpeg, preferring silence boundaries.
 
     Args:
         audio_path: Path to audio file
-        chunk_minutes: Duration of each chunk in minutes
-        overlap_seconds: Overlap between chunks in seconds
+        chunk_minutes: Target duration of each chunk in minutes
+        overlap_seconds: Overlap between chunks (only for fixed-interval fallback)
+        silence_split: Whether to use silence-based splitting
+        silence_noise_db: dB threshold for silence detection
+        silence_min_duration: Minimum silence duration in seconds
+        silence_search_window: Search window around target boundary in seconds
 
     Returns:
-        List of paths to chunk files
+        List of (chunk_path, start_time_seconds) tuples
     """
     import librosa
 
     duration = librosa.get_duration(path=audio_path)
     chunk_seconds = chunk_minutes * 60
 
-    chunks = []
-    start_time = 0
-    chunk_index = 0
+    # Try silence-based splitting
+    split_points = []
+    if silence_split:
+        silences = detect_silences(audio_path, silence_noise_db, silence_min_duration)
+        if silences:
+            split_points = select_split_points(
+                silences, duration, chunk_seconds, silence_search_window
+            )
+            if split_points:
+                print(f"Splitting at {len(split_points)} silence boundaries: "
+                      f"{[f'{p:.1f}s' for p in split_points]}")
 
-    while start_time < duration:
-        chunk_path = os.path.join(tempfile.gettempdir(), f"chunk_{os.getpid()}_{chunk_index}.mp3")
+    # Build chunk boundaries
+    if split_points:
+        # Silence-based: no overlap needed
+        boundaries = [0.0] + split_points + [duration]
+    else:
+        # Fixed-interval fallback
+        if silence_split:
+            print("No suitable silences found, falling back to fixed-interval splitting")
+        boundaries = []
+        start = 0.0
+        while start < duration:
+            boundaries.append(start)
+            start += (chunk_seconds - overlap_seconds)
+        boundaries.append(duration)
+
+    # Split at boundaries
+    chunks = []
+    for i in range(len(boundaries) - 1):
+        start = boundaries[i]
+        end = boundaries[i + 1]
+        chunk_duration = end - start
+
+        if chunk_duration < 1:  # Skip tiny chunks
+            continue
+
+        chunk_path = os.path.join(tempfile.gettempdir(), f"chunk_{os.getpid()}_{i}.mp3")
 
         subprocess.run([
             "ffmpeg", "-y",
-            "-ss", str(start_time),
-            "-t", str(chunk_seconds),
+            "-ss", str(start),
+            "-t", str(chunk_duration),
             "-i", audio_path,
-            "-c", "copy",  # No re-encoding for speed
+            "-c", "copy",
             chunk_path
         ], check=True, capture_output=True)
 
-        chunks.append(chunk_path)
-        start_time += (chunk_seconds - overlap_seconds)
-        chunk_index += 1
+        chunks.append((chunk_path, start))
 
     return chunks
 
@@ -534,15 +668,28 @@ class TranscriptionService:
 
             # If audio is long, split into chunks
             if duration > chunk_threshold:
-                num_chunks = int(duration / (chunk_size * 60)) + 1
-                msg = f"Audio is {duration/60:.1f} minutes. Splitting into {num_chunks} chunks ({chunk_size}min each)..."
+                msg = f"Audio is {duration/60:.1f} minutes. Detecting silence boundaries..."
                 print(msg)  # Console logging
                 yield msg, None
 
-                chunks = split_audio(audio_path, chunk_minutes=chunk_size, overlap_seconds=chunk_overlap)
+                chunks = split_audio(
+                    audio_path,
+                    chunk_minutes=chunk_size,
+                    overlap_seconds=chunk_overlap,
+                    silence_split=config.transcription.silence_split,
+                    silence_noise_db=config.transcription.silence_noise_db,
+                    silence_min_duration=config.transcription.silence_min_duration,
+                    silence_search_window=config.transcription.silence_search_window,
+                )
+
+                num_chunks = len(chunks)
+                msg = f"Split into {num_chunks} chunks"
+                print(msg)
+                yield msg, None
+
                 all_segments = []
 
-                for i, chunk_path in enumerate(chunks):
+                for i, (chunk_path, chunk_start_time) in enumerate(chunks):
                     # Check stop flag before each chunk
                     if check_stop_flag():
                         msg = "Stopped by user."
@@ -553,18 +700,16 @@ class TranscriptionService:
                         )
                         return
 
-                    msg = f"Processing chunk {i+1}/{len(chunks)}..."
+                    chunk_dur = chunks[i + 1][1] - chunk_start_time if i + 1 < len(chunks) else duration - chunk_start_time
+                    msg = f"Processing chunk {i+1}/{num_chunks} ({chunk_dur:.0f}s starting at {chunk_start_time:.0f}s)..."
                     print(msg)  # Console logging
                     yield msg, None
-
-                    # Process this chunk
-                    chunk_start_time = i * (chunk_size * 60 - chunk_overlap)  # Account for overlap
 
                     for partial_text, partial_result in self._transcribe_single_stream(
                         chunk_path, hotwords, max_new_tokens
                     ):
                         if partial_result is None:
-                            yield f"Chunk {i+1}/{len(chunks)}: {partial_text}", None
+                            yield f"Chunk {i+1}/{num_chunks}: {partial_text}", None
                         else:
                             # Adjust timestamps and merge segments
                             print(f"DEBUG: Chunk {i+1} returned {len(partial_result.segments)} segments")
@@ -642,8 +787,9 @@ class TranscriptionService:
             yield error_msg, result
         finally:
             # Clean up chunk files
-            for chunk_path in chunks:
-                Path(chunk_path).unlink(missing_ok=True)
+            for item in chunks:
+                path = item[0] if isinstance(item, tuple) else item
+                Path(path).unlink(missing_ok=True)
 
     def _transcribe_single_stream(
         self,

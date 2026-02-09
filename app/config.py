@@ -34,6 +34,11 @@ class TranscriptionConfig:
     chunk_threshold_minutes: int = 0
     chunk_size_minutes: int = 0
     chunk_overlap_seconds: int = 10
+    # Silence-based splitting (split at natural pauses instead of fixed intervals)
+    silence_split: bool = True
+    silence_noise_db: int = -30           # dB threshold for silence detection
+    silence_min_duration: float = 0.5     # Minimum silence length in seconds
+    silence_search_window: int = 30       # Seconds around target boundary to search for silence
 
 
 @dataclass
