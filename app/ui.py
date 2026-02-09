@@ -94,6 +94,9 @@ def create_ui() -> gr.Blocks:
                         label="Transcription",
                         lines=20
                     )
+                    with gr.Row():
+                        copy_btn = gr.Button("Copy Full Transcript", size="sm")
+                        copy_text_btn = gr.Button("Copy Text Only", size="sm")
 
                 with gr.Tab("JSON"):
                     json_output = gr.Code(
@@ -119,6 +122,25 @@ def create_ui() -> gr.Blocks:
             from app.transcribe import set_stop_flag
             set_stop_flag(False)  # Reset flag
             yield from process_audio_stream(audio, hotwords)
+
+        # Copy buttons use JavaScript to write to clipboard
+        copy_btn.click(
+            fn=None,
+            inputs=[text_output],
+            js="(text) => { navigator.clipboard.writeText(text); }",
+        )
+        copy_text_btn.click(
+            fn=None,
+            inputs=[text_output],
+            js="""(text) => {
+                const lines = text.split('\\n');
+                const textOnly = lines
+                    .filter(l => l.startsWith('"') || (l.length > 0 && !l.startsWith('[') && !l.startsWith('---')))
+                    .map(l => l.replace(/^"|"$/g, ''))
+                    .join('\\n');
+                navigator.clipboard.writeText(textOnly);
+            }""",
+        )
 
         # Connect the buttons
         stop_btn.click(fn=stop_transcription, outputs=text_output)
