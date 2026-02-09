@@ -88,29 +88,38 @@ def get_torch_dtype(dtype_str: str) -> torch.dtype:
 def auto_chunk_settings() -> tuple[int, int]:
     """Calculate chunk threshold and size based on GPU memory.
 
+    Uses the SMALLEST single-GPU free memory as the constraint,
+    since audio encoding happens entirely on one GPU.
+
     Returns:
         (chunk_threshold_minutes, chunk_size_minutes)
     """
     if not torch.cuda.is_available():
         return 5, 3  # Conservative defaults for CPU
 
-    # Total VRAM across all GPUs (in GB)
-    total_vram_gb = sum(
-        torch.cuda.get_device_properties(i).total_memory / (1024**3)
-        for i in range(torch.cuda.device_count())
-    )
+    gpu_count = torch.cuda.device_count()
 
-    # Estimate model memory usage
+    # Get per-GPU memory
+    gpu_memories_gb = [
+        torch.cuda.get_device_properties(i).total_memory / (1024**3)
+        for i in range(gpu_count)
+    ]
+    single_gpu_gb = min(gpu_memories_gb)  # Smallest GPU is the bottleneck
+    total_vram_gb = sum(gpu_memories_gb)
+
+    # Estimate model memory per GPU
     # VibeVoice-ASR 9B: ~18GB in bf16/fp16, ~4.5GB in 4-bit
-    # We use a rough estimate; actual usage varies
     model_gb = 5  # Conservative estimate (4-bit quantized)
     if total_vram_gb > 30:
         model_gb = 18  # Full precision likely used with enough VRAM
 
-    available_gb = total_vram_gb - model_gb
+    # With multi-GPU, model weights are split across GPUs
+    # Available = single GPU size - (model weight share on that GPU)
+    model_per_gpu_gb = model_gb / gpu_count
+    available_gb = single_gpu_gb - model_per_gpu_gb
 
-    # Heuristic: ~1.8GB VRAM per minute of audio for inference activations
-    # This is approximate and depends on model architecture
+    # Heuristic: ~2.0GB VRAM per minute of audio for inference activations
+    # Audio encoding + generation activations happen on the processing GPU
     gb_per_minute = 2.0
     max_chunk_minutes = max(2, int(available_gb / gb_per_minute))
 
@@ -118,8 +127,8 @@ def auto_chunk_settings() -> tuple[int, int]:
     chunk_size = min(max_chunk_minutes, 30)  # Never more than 30 min
     chunk_threshold = chunk_size + 2  # Trigger chunking 2 min before max
 
-    print(f"Auto chunk settings: {total_vram_gb:.0f}GB VRAM, "
-          f"~{available_gb:.0f}GB available -> "
+    print(f"Auto chunk settings: {gpu_count} GPU(s), {single_gpu_gb:.0f}GB each, "
+          f"~{model_per_gpu_gb:.0f}GB model/GPU, ~{available_gb:.0f}GB free/GPU -> "
           f"threshold={chunk_threshold}min, chunk_size={chunk_size}min")
 
     return chunk_threshold, chunk_size
