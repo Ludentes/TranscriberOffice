@@ -227,19 +227,23 @@ class TranscriptionService:
         # (VibeVoice's from_pretrained ignores device_map kwargs)
         if use_device_map and max_memory:
             from accelerate import infer_auto_device_map, dispatch_model
-            from accelerate.utils import get_balanced_memory
 
-            print("Distributing model across GPUs with accelerate...")
-            max_memory = get_balanced_memory(
-                self.model,
-                max_memory=max_memory,
-                low_zero=(use_device_map == "balanced_low_0")
-            )
-            print(f"  Balanced memory allocation: {max_memory}")
+            # Convert max_memory strings to bytes for infer_auto_device_map
+            max_memory_bytes = {}
+            for k, v in max_memory.items():
+                gb = int(v.replace("GiB", ""))
+                max_memory_bytes[k] = gb * (1024**3)
+
+            print(f"Distributing model across GPUs with accelerate...")
+            print(f"  Max memory per GPU: {max_memory}")
             device_map = infer_auto_device_map(
                 self.model,
-                max_memory=max_memory
+                max_memory=max_memory_bytes
             )
+            # Log the split
+            from collections import Counter
+            layer_distribution = Counter(device_map.values())
+            print(f"  Device map: {dict(layer_distribution)} layers per device")
             self.model = dispatch_model(self.model, device_map=device_map)
             self._using_device_map = True
         else:
@@ -274,12 +278,12 @@ class TranscriptionService:
             return None, None
 
         # Multiple GPUs available - force model to split across them
-        # Reserve ~25% of each GPU for inference activations
+        # Use 50% per GPU for model weights, leave 50% for inference activations
+        # This ensures the model MUST split across GPUs
         max_memory = {}
         for i in range(gpu_count):
             total_gb = torch.cuda.get_device_properties(i).total_memory / (1024**3)
-            # Use 75% for model weights, leave 25% for activations
-            model_limit_gb = int(total_gb * 0.75)
+            model_limit_gb = int(total_gb * 0.5)
             max_memory[i] = f"{model_limit_gb}GiB"
         dm = "balanced_low_0" if self.device_map == "auto" else self.device_map
         print(f"  Multi-GPU detected ({gpu_count} GPUs) - using device_map='{dm}'")
