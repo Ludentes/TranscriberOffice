@@ -4,10 +4,12 @@ A web application and API for transcribing meetings with speaker identification 
 
 ## Features
 
-- **60-minute single-pass transcription** — process long meetings without chunking
+- **Long audio support** — automatic chunking for files of any length
+- **Multi-GPU support** — automatically splits model across multiple GPUs
 - **Speaker diarization** — automatic speaker identification (Speaker 1, Speaker 2, etc.)
 - **Timestamps** — precise timing for each utterance
 - **Hotwords support** — improve recognition of names, technical terms, and jargon
+- **Stop button** — cancel transcription mid-process
 - **Web UI** — simple Gradio interface for uploading and viewing transcripts
 - **REST API** — integrate with n8n, Zapier, or custom workflows
 - **Cross-platform** — runs on Linux and Windows with NVIDIA GPU
@@ -21,10 +23,12 @@ A web application and API for transcribing meetings with speaker identification 
 
 ### Supported GPUs
 
-| GPU | VRAM | Model Variant | dtype |
-|-----|------|---------------|-------|
-| RTX 3090/4090 (Ampere+) | 24GB | microsoft/VibeVoice-ASR | bfloat16 |
-| Tesla P40 (Pascal) | 24GB | scerz/VibeVoice-ASR-4bit | float16 |
+| GPU | VRAM | Model Variant | dtype | Multi-GPU |
+|-----|------|---------------|-------|-----------|
+| RTX 3090/4090 (Ampere+) | 24GB | microsoft/VibeVoice-ASR | bfloat16 | Optional |
+| RTX 5090 (Blackwell) | 32GB | microsoft/VibeVoice-ASR | bfloat16 | Optional |
+| 2x Tesla P40 (Pascal) | 2x 24GB | microsoft/VibeVoice-ASR | float16 | Required for full model |
+| Tesla P40 (Pascal) | 24GB | scerz/VibeVoice-ASR-4bit | float16 | Not needed |
 
 ## Quick Start
 
@@ -117,15 +121,48 @@ server:
 
 model:
   path: "microsoft/VibeVoice-ASR"  # or "scerz/VibeVoice-ASR-4bit"
-  dtype: "auto"  # auto-detects based on GPU
+  dtype: "auto"                     # auto-detects based on GPU
   cache_dir: "./models"
   attn_implementation: "sdpa"
+  use_quantized: "auto"             # "auto", "true", "false"
+  device_map: "auto"                # "auto", "single", or "balanced_low_0"
 
 transcription:
   max_file_size_mb: 500
   timeout_seconds: 1800
   default_max_new_tokens: 8192
+  chunk_threshold_minutes: 0        # 0 = auto, or minutes before splitting
+  chunk_size_minutes: 0             # 0 = auto, or chunk duration in minutes
+  chunk_overlap_seconds: 10         # Overlap between chunks
 ```
+
+### Multi-GPU Setup
+
+When `device_map: "auto"` (default), the app automatically detects multiple GPUs and splits the full-precision model across them using [HuggingFace Accelerate](https://huggingface.co/docs/accelerate). The quantized 4-bit model always runs on a single GPU since it's small enough to fit.
+
+| Setting | Behavior |
+|---------|----------|
+| `device_map: "auto"` | Multi-GPU if 2+ GPUs and full-precision model; single GPU for quantized |
+| `device_map: "single"` | Force single GPU (useful for debugging) |
+
+**Notes for multi-GPU:**
+- Audio tokenizers and connectors are kept on the same GPU as the embedding layer
+- Language model layers are balanced across GPUs by parameter size
+- Chunk sizes are automatically calculated based on per-GPU free memory
+- Only one transcription runs at a time (queued for concurrent users)
+
+### Audio Chunking
+
+Long audio files are automatically split into chunks to prevent GPU out-of-memory errors. When set to `0`, chunk sizes are auto-calculated based on available GPU memory:
+
+| GPU Setup | Model | Approx Chunk Size |
+|-----------|-------|-------------------|
+| 1x RTX 3090 (24GB) | Full (fp16) | ~3 min |
+| 2x Tesla P40 (48GB) | Full (fp16) | ~7 min |
+| 1x Tesla P40 (24GB) | 4-bit | ~9 min |
+| 1x RTX 4090 (24GB) | Full (bf16) | ~3 min |
+
+Speaker IDs are chunk-local (e.g., "Speaker 1 (Chunk 1)") since speaker identity cannot be tracked across chunks.
 
 ## Project Structure
 

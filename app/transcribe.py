@@ -325,6 +325,11 @@ class TranscriptionService:
         if self.device_map == "single":
             return None, None
 
+        # Quantized models fit on a single GPU - no need to split
+        if "4bit" in self.model_path.lower():
+            print("  Quantized model detected - using single GPU (no split needed)")
+            return None, None
+
         gpu_count = torch.cuda.device_count()
 
         if gpu_count < 2:
@@ -518,7 +523,8 @@ class TranscriptionService:
             # Auto-calculate chunk settings if set to 0
             if chunk_threshold_min == 0 or chunk_size == 0:
                 from app.config import auto_chunk_settings
-                auto_threshold, auto_size = auto_chunk_settings()
+                is_quantized = "4bit" in self.model_path.lower()
+                auto_threshold, auto_size = auto_chunk_settings(quantized=is_quantized)
                 if chunk_threshold_min == 0:
                     chunk_threshold_min = auto_threshold
                 if chunk_size == 0:

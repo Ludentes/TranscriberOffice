@@ -62,6 +62,11 @@ def get_model_path(config: ModelConfig) -> str:
         return config.path
 
 
+def is_quantized_model(config: ModelConfig) -> bool:
+    """Check if the resolved model path is a quantized model."""
+    return "4bit" in get_model_path(config).lower()
+
+
 def get_torch_dtype(dtype_str: str) -> torch.dtype:
     """Convert string dtype to torch.dtype, with auto-detection."""
     dtype_str = dtype_str.lower()
@@ -85,11 +90,14 @@ def get_torch_dtype(dtype_str: str) -> torch.dtype:
         raise ValueError(f"Unknown dtype: {dtype_str}")
 
 
-def auto_chunk_settings() -> tuple[int, int]:
+def auto_chunk_settings(quantized: bool = False) -> tuple[int, int]:
     """Calculate chunk threshold and size based on GPU memory.
 
     Uses the SMALLEST single-GPU free memory as the constraint,
     since audio encoding happens entirely on one GPU.
+
+    Args:
+        quantized: Whether the model is quantized (4-bit, ~4.5GB vs ~18GB)
 
     Returns:
         (chunk_threshold_minutes, chunk_size_minutes)
@@ -105,21 +113,19 @@ def auto_chunk_settings() -> tuple[int, int]:
         for i in range(gpu_count)
     ]
     single_gpu_gb = min(gpu_memories_gb)  # Smallest GPU is the bottleneck
-    total_vram_gb = sum(gpu_memories_gb)
 
-    # Estimate model memory per GPU
-    # VibeVoice-ASR 9B: ~18GB in bf16/fp16, ~4.5GB in 4-bit
-    model_gb = 5  # Conservative estimate (4-bit quantized)
-    if total_vram_gb > 30:
-        model_gb = 18  # Full precision likely used with enough VRAM
+    # Model size depends on quantization
+    model_gb = 5 if quantized else 18
 
-    # With multi-GPU, model weights are split across GPUs
-    # Available = single GPU size - (model weight share on that GPU)
-    model_per_gpu_gb = model_gb / gpu_count
+    # Quantized model fits on 1 GPU; full model may be split across GPUs
+    if quantized or gpu_count == 1:
+        model_per_gpu_gb = model_gb
+    else:
+        model_per_gpu_gb = model_gb / gpu_count
+
     available_gb = single_gpu_gb - model_per_gpu_gb
 
     # Heuristic: ~2.0GB VRAM per minute of audio for inference activations
-    # Audio encoding + generation activations happen on the processing GPU
     gb_per_minute = 2.0
     max_chunk_minutes = max(2, int(available_gb / gb_per_minute))
 
@@ -128,6 +134,7 @@ def auto_chunk_settings() -> tuple[int, int]:
     chunk_threshold = chunk_size + 2  # Trigger chunking 2 min before max
 
     print(f"Auto chunk settings: {gpu_count} GPU(s), {single_gpu_gb:.0f}GB each, "
+          f"model={model_gb}GB {'(4-bit)' if quantized else '(fp16)'}, "
           f"~{model_per_gpu_gb:.0f}GB model/GPU, ~{available_gb:.0f}GB free/GPU -> "
           f"threshold={chunk_threshold}min, chunk_size={chunk_size}min")
 
