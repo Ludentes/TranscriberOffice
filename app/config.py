@@ -96,7 +96,7 @@ def auto_chunk_settings() -> tuple[int, int]:
 
     # Total VRAM across all GPUs (in GB)
     total_vram_gb = sum(
-        torch.cuda.get_device_properties(i).total_mem / (1024**3)
+        torch.cuda.get_device_properties(i).total_memory / (1024**3)
         for i in range(torch.cuda.device_count())
     )
 

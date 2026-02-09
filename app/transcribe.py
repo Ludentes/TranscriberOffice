@@ -210,7 +210,7 @@ class TranscriptionService:
             )
 
             model_kwargs = dict(
-                torch_dtype=self.dtype,
+                dtype=self.dtype,
                 cache_dir=self.cache_dir,
                 attn_implementation=self.attn_implementation,
                 trust_remote_code=True
