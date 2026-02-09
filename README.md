@@ -4,7 +4,7 @@ A web application and API for transcribing meetings with speaker identification 
 
 ## Features
 
-- **Long audio support** — automatic chunking for files of any length
+- **Long audio support** — silence-based splitting for files of any length
 - **Multi-GPU support** — automatically splits model across multiple GPUs
 - **Speaker diarization** — automatic speaker identification (Speaker 1, Speaker 2, etc.)
 - **Timestamps** — precise timing for each utterance
@@ -133,7 +133,12 @@ transcription:
   default_max_new_tokens: 8192
   chunk_threshold_minutes: 0        # 0 = auto, or minutes before splitting
   chunk_size_minutes: 0             # 0 = auto, or chunk duration in minutes
-  chunk_overlap_seconds: 10         # Overlap between chunks
+  chunk_overlap_seconds: 10         # Overlap (only used when no silence found)
+  # Silence-based splitting
+  silence_split: true               # Split at natural pauses (recommended)
+  silence_noise_db: -30             # dB threshold for silence detection
+  silence_min_duration: 0.5         # Minimum silence length in seconds
+  silence_search_window: 30         # Search window around target boundary (seconds)
 ```
 
 ### Multi-GPU Setup
@@ -153,7 +158,15 @@ When `device_map: "auto"` (default), the app automatically detects multiple GPUs
 
 ### Audio Chunking
 
-Long audio files are automatically split into chunks to prevent GPU out-of-memory errors. When set to `0`, chunk sizes are auto-calculated based on available GPU memory:
+Long audio files are automatically split into chunks to prevent GPU out-of-memory errors. By default, splitting uses **silence detection** — ffmpeg finds natural pauses in the audio and splits at the nearest silence to each target chunk boundary. This avoids cutting mid-sentence and produces better transcriptions than fixed-interval splitting.
+
+When `silence_split: true` (default):
+- ffmpeg `silencedetect` finds all pauses in the audio
+- Each target chunk boundary snaps to the nearest silence within a configurable search window
+- No overlap is needed since splits happen at natural pauses
+- Falls back to fixed-interval splitting if no silences are found
+
+Chunk sizes are auto-calculated based on available GPU memory when set to `0`:
 
 | GPU Setup | Model | Approx Chunk Size |
 |-----------|-------|-------------------|
@@ -163,6 +176,12 @@ Long audio files are automatically split into chunks to prevent GPU out-of-memor
 | 1x RTX 4090 (24GB) | Full (bf16) | ~3 min |
 
 Speaker IDs are chunk-local (e.g., "Speaker 1 (Chunk 1)") since speaker identity cannot be tracked across chunks.
+
+### Performance
+
+- **`torch.compile()`** is applied at model load for faster inference (~20-30% speedup after a one-time ~30s warmup)
+- **Audio is pre-downsampled** to 24kHz mono during chunk splitting, so the model processor skips per-chunk resampling
+- **`torch.inference_mode()`** is used during generation for reduced overhead
 
 ## Project Structure
 
