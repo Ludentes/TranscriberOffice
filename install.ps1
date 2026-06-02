@@ -133,13 +133,7 @@ New-Item -ItemType Directory -Force -Path "models" | Out-Null
 # Verify installation
 Write-Host ""
 Write-Host "Verifying installation..."
-python -c @"
-import torch
-print(f'PyTorch: {torch.__version__}')
-print(f'CUDA available: {torch.cuda.is_available()}')
-if torch.cuda.is_available():
-    print(f'CUDA device: {torch.cuda.get_device_name(0)}')
-"@
+python -c "import torch; print('PyTorch:', torch.__version__); print('CUDA available:', torch.cuda.is_available()); print('CUDA device:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'none')"
 
 # Verify VibeVoice installation
 Write-Host "Verifying VibeVoice installation..." -ForegroundColor Cyan
@@ -153,16 +147,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # Verify imports work
-python -c @"
-import sys
-try:
-    from vibevoice.processor.vibevoice_asr_processor import VibeVoiceASRProcessor
-    from vibevoice.modular.modeling_vibevoice_asr import VibeVoiceASRForConditionalGeneration
-    print('✓ VibeVoice installed and imports work')
-except ImportError as e:
-    print(f'✗ VibeVoice import failed: {e}', file=sys.stderr)
-    sys.exit(1)
-"@
+python -c "from vibevoice.processor.vibevoice_asr_processor import VibeVoiceASRProcessor; from vibevoice.modular.modeling_vibevoice_asr import VibeVoiceASRForConditionalGeneration; print('VibeVoice installed and imports work')"
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: VibeVoice imports failed" -ForegroundColor Red
