@@ -20,6 +20,26 @@ class TranscriptionSegment(BaseModel):
     end: float
     text: str
 
+    @classmethod
+    def from_raw(cls, seg: dict) -> "TranscriptionSegment":
+        """Build from a pipeline segment, tolerating both naming conventions.
+
+        The transcription pipeline may emit either start/end/speaker or
+        start_time/end_time/speaker_id (see format_transcript), and speaker may
+        be missing entirely. Normalize all of these here.
+        """
+        speaker_id = seg.get("speaker", seg.get("speaker_id", "Speaker 1"))
+        if isinstance(speaker_id, (int, float)):
+            speaker = f"Speaker {int(speaker_id)}"
+        else:
+            speaker = str(speaker_id)
+        return cls(
+            speaker=speaker,
+            start=float(seg.get("start", seg.get("start_time", 0)) or 0),
+            end=float(seg.get("end", seg.get("end_time", 0)) or 0),
+            text=(seg.get("text") or "").strip(),
+        )
+
 
 class TranscriptionResponse(BaseModel):
     success: bool
@@ -89,7 +109,7 @@ async def transcribe_audio(
             duration_seconds=result.duration_seconds,
             speakers_detected=result.speakers_detected,
             processing_time_seconds=round(result.processing_time_seconds, 2),
-            segments=[TranscriptionSegment(**seg) for seg in result.segments],
+            segments=[TranscriptionSegment.from_raw(seg) for seg in result.segments],
             full_text=result.full_text,
             error=result.error
         )
