@@ -29,3 +29,7 @@ uploads/
 .DS_Store
 Thumbs.db
 .claude
+temp
+meetings/
+meetings.zip
+*.zip
