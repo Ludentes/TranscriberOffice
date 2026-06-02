@@ -203,6 +203,18 @@ Transcriber/
 └── requirements.txt    # Python dependencies
 ```
 
+## Guides & Runbooks
+
+Step-by-step guides for everyday use (in [`docs/`](docs/)):
+
+- [**Meetings: from OBS to summary**](docs/runbook-meetings-for-colleagues.md) —
+  the office guide. How to transcribe an OBS recording, summarize it, and replace
+  "Speaker 0/1" with real names — mostly copy-paste Claude Code prompts. Start here.
+- [**Process a recording (power path)**](docs/runbook-process-recording.md) —
+  the full batch pipeline over SSH, best for long multi-hour recordings.
+- [**Start the Transcriber on machine 25**](docs/runbook-start-transcriber-windows-25.md) —
+  how to start the app at the office Windows box (RTX 3090).
+
 ## Development
 
 ```bash
