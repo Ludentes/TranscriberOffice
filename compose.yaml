@@ -1,0 +1,25 @@
+services:
+  transcriber:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: transcriber-office
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./app:/app/app:ro
+      - ./models:/app/models
+    environment:
+      HF_HOME: /app/models/huggingface
+    shm_size: "8gb"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7860/api/health', timeout=5)"
+      interval: 20s
+      timeout: 10s
+      retries: 6
+      start_period: 60s

@@ -31,6 +31,11 @@ def check_stop_flag() -> bool:
     return _stop_flag
 
 
+def _stop_requested(stop_event: Optional[threading.Event]) -> bool:
+    """Check a session-specific event, falling back to the legacy global flag."""
+    return stop_event.is_set() if stop_event is not None else check_stop_flag()
+
+
 @dataclass
 class TranscriptionResult:
     """Result from transcription."""
@@ -625,7 +630,8 @@ class TranscriptionService:
         self,
         audio_path: str,
         hotwords: Optional[str] = None,
-        max_new_tokens: int = 8192
+        max_new_tokens: int = 8192,
+        stop_event: Optional[threading.Event] = None,
     ) -> Generator[tuple[str, Optional[TranscriptionResult]], None, None]:
         """Transcribe an audio file with streaming output.
 
@@ -648,7 +654,7 @@ class TranscriptionService:
             from transformers import TextIteratorStreamer
 
             # Check stop flag before starting
-            if check_stop_flag():
+            if _stop_requested(stop_event):
                 msg = "Stopped by user."
                 print(msg)
                 yield msg, TranscriptionResult(
@@ -703,7 +709,7 @@ class TranscriptionService:
 
                 for i, (chunk_path, chunk_start_time) in enumerate(chunks):
                     # Check stop flag before each chunk
-                    if check_stop_flag():
+                    if _stop_requested(stop_event):
                         msg = "Stopped by user."
                         print(msg)
                         yield msg, TranscriptionResult(
@@ -718,7 +724,7 @@ class TranscriptionService:
                     yield msg, None
 
                     for partial_text, partial_result in self._transcribe_single_stream(
-                        chunk_path, hotwords, max_new_tokens
+                        chunk_path, hotwords, max_new_tokens, stop_event
                     ):
                         if partial_result is None:
                             yield f"Chunk {i+1}/{num_chunks}: {partial_text}", None
@@ -776,7 +782,7 @@ class TranscriptionService:
                 yield msg, None
 
                 for partial_text, final_result in self._transcribe_single_stream(
-                    audio_path, hotwords, max_new_tokens
+                    audio_path, hotwords, max_new_tokens, stop_event
                 ):
                     yield partial_text, final_result
 
@@ -807,10 +813,11 @@ class TranscriptionService:
         self,
         audio_path: str,
         hotwords: Optional[str],
-        max_new_tokens: int
+        max_new_tokens: int,
+        stop_event: Optional[threading.Event] = None,
     ) -> Generator[tuple[str, Optional[TranscriptionResult]], None, None]:
         """Transcribe a single audio file with streaming (internal helper)."""
-        from transformers import TextIteratorStreamer
+        from transformers import StoppingCriteria, StoppingCriteriaList, TextIteratorStreamer
         import librosa
 
         start_time = time.time()
@@ -841,6 +848,10 @@ class TranscriptionService:
         # Container for result from thread
         result_container = {"text": "", "error": None}
 
+        class StopOnRequest(StoppingCriteria):
+            def __call__(self, input_ids, scores, **kwargs) -> bool:
+                return _stop_requested(stop_event)
+
         def generate_thread():
             try:
                 with torch.inference_mode():
@@ -853,6 +864,7 @@ class TranscriptionService:
                         eos_token_id=self.processor.tokenizer.eos_token_id,
                         pad_token_id=getattr(self.processor, 'pad_id', self.processor.tokenizer.pad_token_id),
                         streamer=streamer,
+                        stopping_criteria=StoppingCriteriaList([StopOnRequest()]),
                     )
             except Exception as e:
                 result_container["error"] = str(e)
@@ -869,9 +881,12 @@ class TranscriptionService:
         token_count = 0
         for new_text in streamer:
             # Check stop flag during generation
-            if check_stop_flag():
+            if _stop_requested(stop_event):
                 msg = "Stopped by user."
                 print(msg)
+                # The queue must not release the GPU slot while generation is
+                # still winding down in the background thread.
+                thread.join()
                 yield msg, TranscriptionResult(
                     success=False, segments=[], full_text="",
                     duration_seconds=0, speakers_detected=0, error="Stopped"

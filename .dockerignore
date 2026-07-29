@@ -1,0 +1,14 @@
+.git
+.agents
+.codex
+__pycache__
+*.py[cod]
+.pytest_cache
+venv
+models
+meetings
+temp
+docs
+tests
+VibeVoice
+*.log
