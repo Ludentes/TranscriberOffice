@@ -25,11 +25,15 @@ def test_create_app(tmp_path):
         with TestClient(app) as client:
             response = client.get("/api/health")
             history = client.get("/api/jobs")
+            token_export = client.get("/api/session/token")
             assert response.status_code == 200
             assert response.json() == {"status": "ok"}
             assert history.status_code == 200
             assert history.json() == []
             assert "transcriber_session=" in response.headers["set-cookie"]
+            assert token_export.status_code == 200
+            assert len(token_export.json()["token"]) == 64
+            assert token_export.headers["cache-control"] == "no-store"
 
         worker = worker_class.return_value
         worker.start.assert_called_once_with()

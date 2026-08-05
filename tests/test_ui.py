@@ -1,4 +1,6 @@
 # tests/test_ui.py
+import json
+
 import pytest
 from unittest.mock import Mock, patch
 
@@ -121,3 +123,8 @@ def test_create_persistent_gradio_interface(tmp_path):
     demo = create_ui(store, service)
 
     assert demo is not None
+    config_text = json.dumps(demo.get_config_file(), ensure_ascii=False)
+    assert "Доступ с другого устройства" in config_text
+    assert "Показать токен" in config_text
+    assert "Использовать токен" in config_text
+    assert "полный доступ ко всей истории" in config_text

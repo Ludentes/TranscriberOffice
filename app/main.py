@@ -13,7 +13,7 @@ from app.job_api import create_job_router
 from app.job_service import JobService
 from app.job_store import JobStore
 from app.job_worker import JobWorker
-from app.session import BrowserSessionMiddleware
+from app.session import BrowserSessionMiddleware, create_session_router
 from app.transcribe import get_transcription_service
 from app.ui import create_ui
 
@@ -57,6 +57,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     # Include API routes
     app.include_router(api_router)
     app.include_router(create_job_router(store, job_service))
+    app.include_router(create_session_router(store, config.session))
 
     # Mount Gradio UI
     ui = create_ui(store, job_service)

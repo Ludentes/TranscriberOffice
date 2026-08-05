@@ -188,6 +188,47 @@ _STATUS_LABELS = {
 }
 
 
+_EXPORT_TOKEN_JS = """
+async () => {
+  try {
+    const response = await fetch('/api/session/token', {
+      credentials: 'same-origin',
+      cache: 'no-store'
+    });
+    const body = await response.json();
+    if (!response.ok) {
+      throw new Error(body.detail || 'Токен недоступен');
+    }
+    return body.token;
+  } catch (error) {
+    return `Ошибка: ${error.message}`;
+  }
+}
+"""
+
+
+_IMPORT_TOKEN_JS = """
+async (token) => {
+  const value = (token || '').trim();
+  if (!value) return 'Вставьте токен доступа.';
+  try {
+    const response = await fetch('/api/session/import', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({token: value})
+    });
+    const body = await response.json();
+    if (!response.ok) return body.detail || 'Неверный токен доступа.';
+    window.location.reload();
+    return 'Переключаем историю…';
+  } catch (error) {
+    return `Ошибка: ${error.message}`;
+  }
+}
+"""
+
+
 def build_history_choices(jobs: list[JobRecord]) -> list[tuple[str, str]]:
     """Build safe dropdown labels from an already owner-scoped job list."""
     return [
@@ -299,6 +340,25 @@ def _create_persistent_ui(store: JobStore, job_service: JobService) -> gr.Blocks
                     refresh_btn = gr.Button("Обновить", size="sm")
                     delete_btn = gr.Button("Удалить из истории", size="sm")
 
+                with gr.Accordion("Доступ с другого устройства", open=False):
+                    gr.Markdown(
+                        "⚠️ **Токен равноценен паролю:** он даёт полный "
+                        "доступ ко всей истории. Не передавайте его посторонним."
+                    )
+                    current_token = gr.Textbox(
+                        label="Токен текущей истории",
+                        value="",
+                        interactive=False,
+                    )
+                    show_token_btn = gr.Button("Показать токен", size="sm")
+                    imported_token = gr.Textbox(
+                        label="Токен с другого браузера",
+                        type="password",
+                        placeholder="64 символа",
+                    )
+                    use_token_btn = gr.Button("Использовать токен", variant="secondary", size="sm")
+                    transfer_status = gr.Markdown("")
+
             with gr.Column(scale=2):
                 with gr.Tab("Транскрипция"):
                     text_output = gr.Textbox(label="Текст", lines=20, interactive=False)
@@ -370,6 +430,20 @@ def _create_persistent_ui(store: JobStore, job_service: JobService) -> gr.Blocks
         )
         stop_btn.click(stop, inputs=[history], outputs=outputs, queue=False)
         delete_btn.click(delete, inputs=[history], outputs=outputs, queue=False)
+        show_token_btn.click(
+            fn=None,
+            inputs=None,
+            outputs=[current_token],
+            js=_EXPORT_TOKEN_JS,
+            queue=False,
+        )
+        use_token_btn.click(
+            fn=None,
+            inputs=[imported_token],
+            outputs=[transfer_status],
+            js=_IMPORT_TOKEN_JS,
+            queue=False,
+        )
         snapshot_btn.click(
             lambda transcript: gr.update(value=transcript, visible=True),
             inputs=[text_output],
