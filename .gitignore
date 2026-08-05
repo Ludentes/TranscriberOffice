@@ -24,6 +24,7 @@ VibeVoice/
 *.ogg
 *.flac
 uploads/
+data/
 *.log
 
 # OS
