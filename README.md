@@ -85,11 +85,22 @@ counts, but not filenames, progress, or transcript contents.
 - Source audio is retained only while queued/running and removed after success,
   failure, or cancellation. Transcript text and JSON remain until deleted in
   the UI.
-- Clearing the browser cookie loses access to its prior history. Anonymous
-  sessions do not support recovery or access from another browser/device.
+- Use **Access from another device → Show token** to reveal the current
+  64-character access token. Treat it exactly like a password: anyone holding
+  it has full read, stop, delete, and download access to that history.
+- On another browser or computer, open **Access from another device**, paste the
+  token, and click **Use token**. The browser switches to that history without
+  merging it with the current history. One token can be used concurrently in
+  multiple browsers.
+- Save the current token before switching if you may need to return to that
+  browser's old history. Clearing the cookie or replacing it without saving the
+  token makes the anonymous history unrecoverable.
 - Set `session.cookie_secure: true` in `config.yaml` when serving over HTTPS.
   Do not enable it for plain local HTTP, because browsers will not send a Secure
   cookie over HTTP.
+
+Token transfer is intended for HTTPS deployments or trusted localhost use. Do
+not paste access tokens into chat, email, issue trackers, URLs, or screenshots.
 
 Docker Compose mounts `./data` at `/app/data`, so history survives container
 recreation. Back up that directory if the transcript archive is important.
