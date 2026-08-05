@@ -2,6 +2,14 @@ server:
   host: "0.0.0.0"
   port: 7860
 
+storage:
+  data_dir: "./data"
+
+session:
+  cookie_name: "transcriber_session"
+  cookie_secure: false  # Set true when the service is exposed over HTTPS
+  cookie_max_age_days: 365
+
 model:
   # Options: "microsoft/VibeVoice-ASR" or "scerz/VibeVoice-ASR-4bit"
   path: "microsoft/VibeVoice-ASR"
