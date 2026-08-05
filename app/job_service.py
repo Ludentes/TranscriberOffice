@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import re
 import uuid
+from typing import BinaryIO
 from pathlib import Path
 
 from app.job_store import JobRecord, JobStatus, JobStore, TERMINAL_STATUSES
@@ -38,20 +39,31 @@ class JobService:
         hotwords: str,
     ) -> JobRecord:
         source = Path(source_path)
+        if not source.is_file():
+            raise JobValidationError("Uploaded audio file is missing")
+        with source.open("rb") as input_file:
+            return self.create_job_from_stream(
+                owner_id, input_file, original_filename, hotwords
+            )
+
+    def create_job_from_stream(
+        self,
+        owner_id: str,
+        input_file: BinaryIO,
+        original_filename: str,
+        hotwords: str,
+    ) -> JobRecord:
         extension = Path(original_filename).suffix.lower()
         if extension not in ALLOWED_AUDIO_EXTENSIONS:
             raise JobValidationError(
                 f"Unsupported audio format. Expected one of: {', '.join(sorted(ALLOWED_AUDIO_EXTENSIONS))}"
             )
-        if not source.is_file():
-            raise JobValidationError("Uploaded audio file is missing")
-
         job_id = uuid.uuid4().hex
         partial_path = self.upload_dir / f"{job_id}.part"
         final_path = self.upload_dir / f"{job_id}{extension}"
         total = 0
         try:
-            with source.open("rb") as input_file, partial_path.open("xb") as output_file:
+            with partial_path.open("xb") as output_file:
                 while chunk := input_file.read(1024 * 1024):
                     total += len(chunk)
                     if total > self.max_file_size_bytes:
