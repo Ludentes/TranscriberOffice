@@ -1,5 +1,6 @@
 # tests/test_main.py
 import pytest
+from fastapi.testclient import TestClient
 from unittest.mock import Mock, patch
 
 
@@ -15,7 +16,7 @@ def test_create_app():
 
         app = create_app()
 
-        # Check API routes are registered
-        routes = [route.path for route in app.routes]
-        assert "/api/transcribe" in routes or any("/api" in r for r in routes)
-        assert "/api/health" in routes or any("health" in r for r in routes)
+        # Check route behavior rather than FastAPI's private route container.
+        response = TestClient(app).get("/api/health")
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok"}
