@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from app.config import get_config
 from app.transcribe import get_transcription_service
-from app.transcription_queue import transcription_queue
+from app.transcription_queue import gpu_execution_lock, transcription_queue
 
 
 router = APIRouter(prefix="/api", tags=["transcription"])
@@ -101,10 +101,11 @@ def transcribe_audio(
 
             # Transcribe
             service = get_transcription_service()
-            result = service.transcribe(
-                audio_path=tmp_path,
-                hotwords=hotwords
-            )
+            with gpu_execution_lock:
+                result = service.transcribe(
+                    audio_path=tmp_path,
+                    hotwords=hotwords
+                )
 
             return TranscriptionResponse(
                 success=result.success,

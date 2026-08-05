@@ -7,6 +7,10 @@ import time
 from typing import Generator
 
 
+# Persistent jobs and the legacy synchronous API share the same GPU/model.
+gpu_execution_lock = threading.Lock()
+
+
 @dataclass(frozen=True)
 class QueueTicket:
     """Opaque ticket identifying a job's place in the queue."""
