@@ -20,6 +20,17 @@ def test_owner_token_is_hashed(tmp_path):
     assert row[0] == hashlib.sha256(("a" * 64).encode()).hexdigest()
 
 
+def test_find_owner_by_token_never_creates_owner(tmp_path):
+    store = make_store(tmp_path)
+    known_token = "a" * 64
+    owner_id = store.resolve_owner(known_token)
+    before = store.owner_count()
+
+    assert store.find_owner_by_token(known_token) == owner_id
+    assert store.find_owner_by_token("b" * 64) is None
+    assert store.owner_count() == before
+
+
 def test_claims_jobs_fifo_and_only_one_runs(tmp_path):
     store = make_store(tmp_path)
     owner_id = store.resolve_owner("b" * 64)

@@ -137,6 +137,21 @@ class JobStore:
             )
             return owner_id
 
+    def find_owner_by_token(self, token: str) -> str | None:
+        """Return an existing owner without creating one for an unknown token."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT id FROM owners WHERE token_hash=?",
+                (self.hash_token(token),),
+            ).fetchone()
+        return str(row["id"]) if row is not None else None
+
+    def owner_count(self) -> int:
+        """Return the owner count for diagnostics and integrity tests."""
+        with self._connect() as connection:
+            row = connection.execute("SELECT COUNT(*) FROM owners").fetchone()
+        return int(row[0])
+
     def create_job(
         self,
         owner_id: str,
