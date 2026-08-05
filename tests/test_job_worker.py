@@ -26,6 +26,18 @@ class FailingService:
         yield
 
 
+class UnsafeResultService:
+    def transcribe_stream(self, audio_path, hotwords, stop_event):
+        yield "failed", TranscriptionResult(
+            success=False,
+            segments=[],
+            full_text="",
+            duration_seconds=0,
+            speakers_detected=0,
+            error="Decoder failed for /private/customer/meeting.mp3",
+        )
+
+
 def queued_job(tmp_path, name="meeting.mp3"):
     data_dir = tmp_path / "data"
     store = JobStore(data_dir / "jobs.sqlite3")
@@ -67,6 +79,18 @@ def test_worker_records_safe_failure_and_can_process_next_job(tmp_path):
 
     assert worker.run_once() is True
     assert store.get_job(owner, second.id).status == JobStatus.COMPLETED
+
+
+def test_worker_does_not_store_model_error_details_in_history(tmp_path):
+    store, job_service, owner, job = queued_job(tmp_path)
+    worker = JobWorker(store, job_service, lambda: UnsafeResultService(), poll_seconds=0.01)
+
+    assert worker.run_once() is True
+
+    failed = store.get_job(owner, job.id)
+    assert failed.status == JobStatus.FAILED
+    assert failed.error_message == "Transcription failed. Check server logs for details."
+    assert "/private/" not in failed.error_message
 
 
 def test_worker_marks_missing_audio_failed(tmp_path):

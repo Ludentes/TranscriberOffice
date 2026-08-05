@@ -7,7 +7,7 @@ import uuid
 from typing import BinaryIO
 from pathlib import Path
 
-from app.job_store import JobRecord, JobStatus, JobStore, TERMINAL_STATUSES
+from app.job_store import JobRecord, JobStore, TERMINAL_STATUSES
 
 
 ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg", ".flac"}

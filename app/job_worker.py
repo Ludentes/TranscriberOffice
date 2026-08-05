@@ -120,9 +120,14 @@ class JobWorker:
                             serialize_result(final_result),
                         )
                     else:
+                        logger.error(
+                            "Transcription job %s returned an error: %s",
+                            job.id,
+                            final_result.error,
+                        )
                         self.store.fail_job(
                             job.id,
-                            final_result.error or "Transcription failed.",
+                            "Transcription failed. Check server logs for details.",
                         )
                     terminal = True
                     break
