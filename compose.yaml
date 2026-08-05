@@ -9,6 +9,7 @@ services:
     volumes:
       - ./app:/app/app:ro
       - ./models:/app/models
+      - ./data:/app/data
     environment:
       HF_HOME: /app/models/huggingface
     shm_size: "8gb"

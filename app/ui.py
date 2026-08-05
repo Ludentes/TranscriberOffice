@@ -176,7 +176,7 @@ def extract_text_only(transcript: str) -> str:
     return text
 
 
-def create_ui() -> gr.Blocks:
+def create_ui(store=None, job_service=None) -> gr.Blocks:
     """Create the Gradio interface."""
 
     with gr.Blocks(title="Meeting Transcriber") as demo:
