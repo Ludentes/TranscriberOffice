@@ -7,6 +7,7 @@ import threading
 import subprocess
 import tempfile
 import os
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Generator
@@ -196,6 +197,27 @@ def parse_model_output(raw_output: str) -> list[dict]:
     return segments
 
 
+def salvage_complete_segments(raw_output: str) -> list[dict]:
+    """Keep only complete structured segments before a malformed/repeated tail."""
+    array_start = raw_output.find("[")
+    if array_start >= 0:
+        # A loop often starts inside the current JSON item. Walk backwards to
+        # the latest completed item and close the array synthetically.
+        boundary = raw_output.rfind("},")
+        while boundary >= array_start:
+            candidate = raw_output[:boundary + 1] + "]"
+            segments = _parse_json_segments(candidate)
+            if segments:
+                return segments
+            boundary = raw_output.rfind("},", array_start, boundary)
+
+    end_token = "<|end|>"
+    boundary = raw_output.rfind(end_token)
+    if boundary >= 0:
+        return parse_model_output(raw_output[:boundary + len(end_token)])
+    return []
+
+
 def detect_silences(
     audio_path: str,
     noise_db: int = -30,
@@ -353,7 +375,10 @@ def split_audio(
         if chunk_duration < 1:  # Skip tiny chunks
             continue
 
-        chunk_path = os.path.join(tempfile.gettempdir(), f"chunk_{os.getpid()}_{i}.wav")
+        chunk_path = os.path.join(
+            tempfile.gettempdir(),
+            f"chunk_{os.getpid()}_{uuid.uuid4().hex}.wav",
+        )
 
         # Downsample to 24kHz mono WAV so the model processor skips resampling
         subprocess.run([
@@ -374,6 +399,9 @@ def split_audio(
 
 class TranscriptionService:
     """Service for transcribing audio using VibeVoice-ASR."""
+
+    _MAX_RECOVERY_SPLIT_DEPTH = 5
+    _MIN_RECOVERY_CHUNK_SECONDS = 15.0
 
     def __init__(
         self,
@@ -616,104 +644,26 @@ class TranscriptionService:
         Returns:
             TranscriptionResult with segments and formatted text
         """
-        if not self._loaded:
-            self.load_model()
+        final_result = None
+        for _, candidate in self.transcribe_stream(
+            audio_path,
+            hotwords,
+            max_new_tokens=max_new_tokens,
+        ):
+            if candidate is not None:
+                final_result = candidate
 
-        start_time = time.time()
-
-        try:
-            # Build context info from hotwords
-            context_info = None
-            if hotwords:
-                terms = [h.strip() for h in hotwords.split(",") if h.strip()]
-                if terms:
-                    context_info = f"Key terms: {', '.join(terms)}"
-
-            # Process audio
-            inputs = self.processor(
-                audio=audio_path,
-                return_tensors="pt",
-                add_generation_prompt=True,
-                context_info=context_info
-            )
-            inputs = {k: v.to(self.input_device) for k, v in inputs.items()}
-
-            # Generate transcription. Retry only if the model degenerates into
-            # a repetition loop; normal requests still use one greedy pass.
-            generated_text = ""
-            recovery_temperatures = [None, 0.2, 0.3, 0.4]
-            for attempt, temperature in enumerate(recovery_temperatures):
-                with torch.no_grad():
-                    output_ids = self.model.generate(
-                        **inputs,
-                        max_new_tokens=max_new_tokens,
-                        do_sample=attempt > 0,
-                        temperature=temperature,
-                        top_p=0.95 if attempt > 0 else None,
-                        eos_token_id=self.processor.tokenizer.eos_token_id,
-                        pad_token_id=getattr(
-                            self.processor, 'pad_id', self.processor.tokenizer.pad_token_id
-                        ),
-                    )
-
-                generated_text = self.processor.decode(
-                    output_ids[0],
-                    skip_special_tokens=False  # Keep speaker tokens for parsing
-                )
-                detector = RepetitionDetector()
-                if not detector.add_text(generated_text):
-                    break
-                if attempt == len(recovery_temperatures) - 1:
-                    raise RuntimeError(
-                        "Transcription failed: the model entered a repetition loop "
-                        "after 3 recovery attempts"
-                    )
-                print(f"Repetition loop detected. Retrying transcription ({attempt + 1}/3)...")
-
-            # Try to use processor's post_process if available
-            try:
-                segments = self.processor.post_process_transcription(generated_text)
-                # Convert to our format if needed
-                if segments and isinstance(segments[0], dict):
-                    pass  # Already in dict format
-                else:
-                    segments = parse_model_output(generated_text)
-            except (AttributeError, TypeError, ValueError):
-                segments = parse_model_output(generated_text)
-
-            if generated_text.strip() and not segments:
-                raise RuntimeError("Transcription failed: model returned malformed output")
-
-            # Get audio duration
-            import librosa
-            duration = librosa.get_duration(path=audio_path)
-
-            # Count unique speakers
-            speakers = set(seg.get("speaker_id", seg.get("speaker", "")) for seg in segments)
-
-            processing_time = time.time() - start_time
-
-            return TranscriptionResult(
-                success=True,
-                segments=segments,
-                full_text=format_transcript(segments),
-                duration_seconds=duration,
-                speakers_detected=len(speakers),
-                processing_time_seconds=processing_time,
-                error=None
-            )
-
-        except Exception as e:
-            processing_time = time.time() - start_time
-            return TranscriptionResult(
-                success=False,
-                segments=[],
-                full_text="",
-                duration_seconds=0,
-                speakers_detected=0,
-                processing_time_seconds=processing_time,
-                error=str(e)
-            )
+        if final_result is not None:
+            return final_result
+        return TranscriptionResult(
+            success=False,
+            segments=[],
+            full_text="",
+            duration_seconds=0,
+            speakers_detected=0,
+            processing_time_seconds=0,
+            error="Transcription stopped without a result",
+        )
 
     def transcribe_stream(
         self,
@@ -794,6 +744,7 @@ class TranscriptionService:
                 yield msg, None
 
                 all_segments = []
+                recovery_warnings = []
 
                 for i, (chunk_path, chunk_start_time) in enumerate(chunks):
                     # Check stop flag before each chunk
@@ -817,6 +768,8 @@ class TranscriptionService:
                         if partial_result is None:
                             yield f"Chunk {i+1}/{num_chunks}: {partial_text}", None
                         else:
+                            if partial_result.error:
+                                recovery_warnings.append(partial_result.error)
                             # Adjust timestamps and merge segments
                             print(f"DEBUG: Chunk {i+1} returned {len(partial_result.segments)} segments")
                             if partial_result.segments:
@@ -850,7 +803,10 @@ class TranscriptionService:
 
                 # Build final result
                 processing_time = time.time() - start_time
-                speakers = set(seg.get("speaker", "") for seg in all_segments)
+                speakers = {
+                    seg.get("speaker_id", seg.get("speaker", ""))
+                    for seg in all_segments
+                }
 
                 result = TranscriptionResult(
                     success=True,
@@ -859,7 +815,7 @@ class TranscriptionService:
                     duration_seconds=duration,
                     speakers_detected=len(speakers),
                     processing_time_seconds=processing_time,
-                    error=None
+                    error="; ".join(dict.fromkeys(recovery_warnings)) or None
                 )
 
                 yield result.full_text, result
@@ -897,12 +853,106 @@ class TranscriptionService:
                 path = item[0] if isinstance(item, tuple) else item
                 Path(path).unlink(missing_ok=True)
 
+    def _recover_looping_audio(
+        self,
+        audio_path: str,
+        hotwords: Optional[str],
+        max_new_tokens: int,
+        stop_event: Optional[threading.Event],
+        recovery_depth: int,
+    ) -> Generator[tuple[str, Optional[TranscriptionResult]], None, None]:
+        """Split a looping fragment and continue without failing the whole job."""
+        import librosa
+
+        duration = librosa.get_duration(path=audio_path)
+        target_seconds = max(self._MIN_RECOVERY_CHUNK_SECONDS, duration / 2)
+        config = get_config()
+        recovery_chunks = []
+        started_at = time.time()
+
+        msg = (
+            "Repetition persisted after retries. Splitting the affected "
+            f"{duration:.0f}s fragment into smaller parts..."
+        )
+        print(msg)
+        yield msg, None
+
+        try:
+            recovery_chunks = split_audio(
+                audio_path,
+                chunk_minutes=target_seconds / 60,
+                overlap_seconds=0,
+                silence_split=config.transcription.silence_split,
+                silence_noise_db=config.transcription.silence_noise_db,
+                silence_min_duration=config.transcription.silence_min_duration,
+                silence_search_window=min(
+                    config.transcription.silence_search_window,
+                    max(1, int(target_seconds / 2)),
+                ),
+            )
+
+            all_segments = []
+            warnings = []
+            for index, (chunk_path, chunk_start) in enumerate(recovery_chunks):
+                final_result = None
+                for partial_text, candidate in self._transcribe_single_stream(
+                    chunk_path,
+                    hotwords,
+                    max_new_tokens,
+                    stop_event,
+                    recovery_depth=recovery_depth + 1,
+                ):
+                    if candidate is None:
+                        yield (
+                            f"Recovery part {index + 1}/{len(recovery_chunks)}: "
+                            f"{partial_text}",
+                            None,
+                        )
+                    else:
+                        final_result = candidate
+
+                if final_result is None:
+                    raise RuntimeError("Recovery fragment stopped without a result")
+                if not final_result.success:
+                    yield final_result.full_text, final_result
+                    return
+                if final_result.error:
+                    warnings.append(final_result.error)
+
+                for segment in final_result.segments:
+                    if "start_time" in segment and "end_time" in segment:
+                        segment["start_time"] += chunk_start
+                        segment["end_time"] += chunk_start
+                    elif "start" in segment and "end" in segment:
+                        segment["start"] += chunk_start
+                        segment["end"] += chunk_start
+                all_segments.extend(final_result.segments)
+
+            speakers = {
+                seg.get("speaker_id", seg.get("speaker", ""))
+                for seg in all_segments
+            }
+            result = TranscriptionResult(
+                success=True,
+                segments=all_segments,
+                full_text=format_transcript(all_segments),
+                duration_seconds=duration,
+                speakers_detected=len(speakers),
+                processing_time_seconds=time.time() - started_at,
+                error="; ".join(dict.fromkeys(warnings)) or None,
+            )
+            yield result.full_text, result
+        finally:
+            for chunk_path, _ in recovery_chunks:
+                Path(chunk_path).unlink(missing_ok=True)
+
     def _transcribe_single_stream(
         self,
         audio_path: str,
         hotwords: Optional[str],
         max_new_tokens: int,
         stop_event: Optional[threading.Event] = None,
+        recovery_depth: int = 0,
     ) -> Generator[tuple[str, Optional[TranscriptionResult]], None, None]:
         """Transcribe a single audio file with streaming (internal helper)."""
         from transformers import StoppingCriteria, StoppingCriteriaList, TextIteratorStreamer
@@ -928,6 +978,8 @@ class TranscriptionService:
 
         generated_text = ""
         recovery_temperatures = [None, 0.2, 0.3, 0.4]
+        best_complete_segments: list[dict] = []
+        loop_recovery_exhausted = False
 
         for attempt, temperature in enumerate(recovery_temperatures):
             streamer = TextIteratorStreamer(
@@ -1006,11 +1058,12 @@ class TranscriptionService:
                 raise RuntimeError(result_container["error"])
 
             if repetition_event.is_set():
+                complete_segments = salvage_complete_segments(attempt_text)
+                if len(complete_segments) > len(best_complete_segments):
+                    best_complete_segments = complete_segments
                 if attempt == len(recovery_temperatures) - 1:
-                    raise RuntimeError(
-                        "Transcription failed: the model entered a repetition loop "
-                        "after 3 recovery attempts"
-                    )
+                    loop_recovery_exhausted = True
+                    break
                 retry_number = attempt + 1
                 msg = (
                     f"Repetition loop detected. Retrying transcription "
@@ -1022,6 +1075,40 @@ class TranscriptionService:
 
             generated_text = attempt_text
             break
+
+        if loop_recovery_exhausted:
+            duration = librosa.get_duration(path=audio_path)
+            if (
+                recovery_depth < self._MAX_RECOVERY_SPLIT_DEPTH
+                and duration > self._MIN_RECOVERY_CHUNK_SECONDS
+            ):
+                yield from self._recover_looping_audio(
+                    audio_path=audio_path,
+                    hotwords=hotwords,
+                    max_new_tokens=max_new_tokens,
+                    stop_event=stop_event,
+                    recovery_depth=recovery_depth,
+                )
+                return
+
+            # At the minimum recovery size, retain only fully parsed segments.
+            # The repeated/malformed tail is never exposed as transcript text.
+            processing_time = time.time() - start_time
+            speakers = {
+                seg.get("speaker_id", seg.get("speaker", ""))
+                for seg in best_complete_segments
+            }
+            result = TranscriptionResult(
+                success=True,
+                segments=best_complete_segments,
+                full_text=format_transcript(best_complete_segments),
+                duration_seconds=duration,
+                speakers_detected=len(speakers),
+                processing_time_seconds=processing_time,
+                error="A minimal audio fragment could not be fully recovered",
+            )
+            yield result.full_text, result
+            return
 
         # Get full output with special tokens for parsing
         full_output = self.processor.decode(
@@ -1043,7 +1130,31 @@ class TranscriptionService:
             segments = parse_model_output(generated_text)
 
         if generated_text.strip() and not segments:
-            raise RuntimeError("Transcription failed: model returned malformed output")
+            duration = librosa.get_duration(path=audio_path)
+            if (
+                recovery_depth < self._MAX_RECOVERY_SPLIT_DEPTH
+                and duration > self._MIN_RECOVERY_CHUNK_SECONDS
+            ):
+                yield from self._recover_looping_audio(
+                    audio_path=audio_path,
+                    hotwords=hotwords,
+                    max_new_tokens=max_new_tokens,
+                    stop_event=stop_event,
+                    recovery_depth=recovery_depth,
+                )
+                return
+
+            result = TranscriptionResult(
+                success=True,
+                segments=[],
+                full_text="",
+                duration_seconds=duration,
+                speakers_detected=0,
+                processing_time_seconds=time.time() - start_time,
+                error="A minimal audio fragment returned malformed output",
+            )
+            yield result.full_text, result
+            return
 
         # Get audio duration
         duration = librosa.get_duration(path=audio_path)

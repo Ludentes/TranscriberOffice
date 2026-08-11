@@ -25,6 +25,12 @@ def test_split_audio_creates_chunks():
                 assert isinstance(chunk_path, str)
                 assert isinstance(start_time, float)
 
+            # Nested recovery may split an already temporary chunk, so names
+            # must never collide with each other or the source path.
+            chunk_paths = [chunk_path for chunk_path, _ in chunks]
+            assert len(chunk_paths) == len(set(chunk_paths))
+            assert "/fake/audio.mp3" not in chunk_paths
+
             # Verify ffmpeg was called
             assert mock_run.call_count >= 2
 

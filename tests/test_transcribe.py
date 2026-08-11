@@ -66,6 +66,20 @@ def test_parse_model_output_rejects_malformed_raw_output():
     assert parse_model_output("assistant\n[{Start0, broken output") == []
 
 
+def test_salvage_complete_segments_removes_repeated_tail():
+    from app.transcribe import salvage_complete_segments
+
+    raw_output = (
+        'assistant\n[{"Start":0,"End":2,"Speaker":0,"Content":"Готово."},'
+        '{"Start":2,"End":4,"Speaker":0,"Content":"я, я, я, я, я, я, я'
+    )
+
+    segments = salvage_complete_segments(raw_output)
+
+    assert [segment["text"] for segment in segments] == ["Готово."]
+    assert "я, я" not in segments[0]["text"]
+
+
 @pytest.mark.parametrize("text", [
     "я, " * 12,
     "ну, поэтому, " * 12,
@@ -190,6 +204,67 @@ def test_streaming_transcription_recovers_from_repetition(monkeypatch):
     assert any("Retrying transcription" in message for message, _ in results)
     assert results[-1][1].success
     assert results[-1][1].full_text.endswith('"Готово."\n')
+
+
+def test_looping_fragment_is_split_and_merged_without_markers(monkeypatch):
+    """Recovery parts continue the job and only clean speech reaches the result."""
+    import sys
+    import types
+    from app.transcribe import TranscriptionResult, TranscriptionService
+
+    librosa = types.ModuleType("librosa")
+    librosa.get_duration = lambda path: 120.0
+    monkeypatch.setitem(sys.modules, "librosa", librosa)
+
+    transcription_config = types.SimpleNamespace(
+        silence_split=False,
+        silence_noise_db=-30,
+        silence_min_duration=0.5,
+        silence_search_window=30,
+    )
+    monkeypatch.setattr(
+        "app.transcribe.get_config",
+        lambda: types.SimpleNamespace(transcription=transcription_config),
+    )
+    monkeypatch.setattr(
+        "app.transcribe.split_audio",
+        lambda *args, **kwargs: [("part-1.wav", 0.0), ("part-2.wav", 60.0)],
+    )
+
+    service = TranscriptionService()
+
+    def transcribe_part(path, *args, **kwargs):
+        text = "Первая часть." if path == "part-1.wav" else "Вторая часть."
+        result = TranscriptionResult(
+            success=True,
+            segments=[{
+                "speaker_id": 0,
+                "start_time": 1.0,
+                "end_time": 3.0,
+                "text": text,
+            }],
+            full_text=text,
+            duration_seconds=60.0,
+            speakers_detected=1,
+            error=None,
+        )
+        yield result.full_text, result
+
+    monkeypatch.setattr(service, "_transcribe_single_stream", transcribe_part)
+
+    outputs = list(
+        service._recover_looping_audio(
+            "source.wav", None, 100, None, recovery_depth=0
+        )
+    )
+    result = outputs[-1][1]
+
+    assert result.success
+    assert [segment["start_time"] for segment in result.segments] == [1.0, 61.0]
+    assert "Первая часть." in result.full_text
+    assert "Вторая часть." in result.full_text
+    assert "Recovery" not in result.full_text
+    assert "repetition" not in result.full_text.lower()
 
 
 def test_vibevoice_import_error_message():
