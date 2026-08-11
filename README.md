@@ -70,7 +70,40 @@ After starting, open your browser to `http://localhost:7860`
 2. Upload an MP3 file
 3. (Optional) Add hotwords for better recognition
 4. Click "Transcribe"
-5. View results in the Transcript or JSON tab
+5. You may reload or close the tab while the background job continues
+6. Return to the history list to copy the result or download TXT/JSON
+
+### Private browser history
+
+The web UI assigns each browser a random identity in an `HttpOnly` cookie. Jobs
+and results are stored in `data/transcriber.sqlite3` and every history operation
+is restricted to that browser identity. Other visitors can see aggregate queue
+counts, but not filenames, progress, or transcript contents.
+
+- Reloading the page restores the active task and prior history.
+- Restarting the server requeues an interrupted task from the beginning.
+- Source audio is retained only while queued/running and removed after success,
+  failure, or cancellation. Transcript text and JSON remain until deleted in
+  the UI.
+- Use **Access from another device → Show token** to reveal the current
+  64-character access token. Treat it exactly like a password: anyone holding
+  it has full read, stop, delete, and download access to that history.
+- On another browser or computer, open **Access from another device**, paste the
+  token, and click **Use token**. The browser switches to that history without
+  merging it with the current history. One token can be used concurrently in
+  multiple browsers.
+- Save the current token before switching if you may need to return to that
+  browser's old history. Clearing the cookie or replacing it without saving the
+  token makes the anonymous history unrecoverable.
+- Set `session.cookie_secure: true` in `config.yaml` when serving over HTTPS.
+  Do not enable it for plain local HTTP, because browsers will not send a Secure
+  cookie over HTTP.
+
+Token transfer is intended for HTTPS deployments or trusted localhost use. Do
+not paste access tokens into chat, email, issue trackers, URLs, or screenshots.
+
+Docker Compose mounts `./data` at `/app/data`, so history survives container
+recreation. Back up that directory if the transcript archive is important.
 
 ### REST API
 
@@ -139,6 +172,14 @@ transcription:
   silence_noise_db: -30             # dB threshold for silence detection
   silence_min_duration: 0.5         # Minimum silence length in seconds
   silence_search_window: 30         # Search window around target boundary (seconds)
+
+storage:
+  data_dir: "./data"
+
+session:
+  cookie_name: "transcriber_session"
+  cookie_secure: false              # true behind HTTPS
+  cookie_max_age_days: 365
 ```
 
 ### Multi-GPU Setup

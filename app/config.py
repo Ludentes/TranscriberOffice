@@ -42,10 +42,24 @@ class TranscriptionConfig:
 
 
 @dataclass
+class StorageConfig:
+    data_dir: str = "./data"
+
+
+@dataclass
+class SessionConfig:
+    cookie_name: str = "transcriber_session"
+    cookie_secure: bool = False
+    cookie_max_age_days: int = 365
+
+
+@dataclass
 class AppConfig:
     server: ServerConfig
     model: ModelConfig
     transcription: TranscriptionConfig
+    storage: StorageConfig
+    session: SessionConfig
 
 
 def get_model_path(config: ModelConfig) -> str:
@@ -156,7 +170,9 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
         return AppConfig(
             server=ServerConfig(),
             model=ModelConfig(),
-            transcription=TranscriptionConfig()
+            transcription=TranscriptionConfig(),
+            storage=StorageConfig(),
+            session=SessionConfig(),
         )
 
     with open(config_path) as f:
@@ -168,7 +184,9 @@ def load_config(config_path: Optional[Path] = None) -> AppConfig:
     return AppConfig(
         server=ServerConfig(**data.get("server", {})),
         model=ModelConfig(**data.get("model", {})),
-        transcription=TranscriptionConfig(**data.get("transcription", {}))
+        transcription=TranscriptionConfig(**data.get("transcription", {})),
+        storage=StorageConfig(**data.get("storage", {})),
+        session=SessionConfig(**data.get("session", {})),
     )
 
 

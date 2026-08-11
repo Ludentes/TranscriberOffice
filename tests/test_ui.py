@@ -1,6 +1,11 @@
 # tests/test_ui.py
+import json
+
 import pytest
 from unittest.mock import Mock, patch
+
+from app.job_service import JobService
+from app.job_store import JobStatus, JobStore
 
 
 def test_create_gradio_interface():
@@ -62,3 +67,64 @@ def test_process_audio_stream_function():
         assert "Completed in" in text_result  # Processing time shown
         assert '"success": true' in json_result.lower() or "success" in json_result
         assert "processing_time_seconds" in json_result
+
+
+def test_history_choices_show_only_supplied_owner_jobs(tmp_path):
+    from app.ui import build_history_choices
+
+    store = JobStore(tmp_path / "jobs.sqlite3")
+    alice = store.resolve_owner("6" * 64)
+    bob = store.resolve_owner("7" * 64)
+    store.create_job(alice, "alice.mp3", "/private/alice.mp3", "")
+    store.create_job(bob, "bob.mp3", "/private/bob.mp3", "")
+
+    choices = build_history_choices(store.list_jobs(alice))
+
+    assert any("alice.mp3" in label for label, _ in choices)
+    assert all("bob.mp3" not in label for label, _ in choices)
+
+
+def test_download_links_are_available_only_for_completed_job(tmp_path):
+    from app.ui import build_download_links
+
+    store = JobStore(tmp_path / "jobs.sqlite3")
+    owner = store.resolve_owner("8" * 64)
+    job = store.create_job(owner, "meeting.mp3", "/private/meeting.mp3", "")
+    assert build_download_links(job) == ""
+    store.claim_next_job()
+    store.complete_job(job.id, "text", "{}")
+
+    completed = store.get_job(owner, job.id)
+    markdown = build_download_links(completed)
+
+    assert f"/api/jobs/{job.id}/download.txt" in markdown
+    assert f"/api/jobs/{job.id}/download.json" in markdown
+
+
+def test_default_history_selection_prefers_active_job(tmp_path):
+    from app.ui import choose_history_job
+
+    store = JobStore(tmp_path / "jobs.sqlite3")
+    owner = store.resolve_owner("9" * 64)
+    completed = store.create_job(owner, "old.mp3", "/private/old.mp3", "")
+    store.claim_next_job()
+    store.complete_job(completed.id, "text", "{}")
+    active = store.create_job(owner, "active.mp3", "/private/active.mp3", "")
+
+    assert choose_history_job(store.list_jobs(owner), None) == active.id
+
+
+def test_create_persistent_gradio_interface(tmp_path):
+    from app.ui import create_ui
+
+    store = JobStore(tmp_path / "data" / "jobs.sqlite3")
+    service = JobService(store, tmp_path / "data", max_file_size_mb=1)
+
+    demo = create_ui(store, service)
+
+    assert demo is not None
+    config_text = json.dumps(demo.get_config_file(), ensure_ascii=False)
+    assert "Доступ с другого устройства" in config_text
+    assert "Показать токен" in config_text
+    assert "Использовать токен" in config_text
+    assert "полный доступ ко всей истории" in config_text

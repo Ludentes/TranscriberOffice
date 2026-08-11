@@ -7,6 +7,7 @@ __pycache__/
 venv/
 ENV/
 .venv/
+.worktrees/
 
 # IDE
 .vscode/
@@ -23,6 +24,7 @@ VibeVoice/
 *.ogg
 *.flac
 uploads/
+data/
 *.log
 
 # OS

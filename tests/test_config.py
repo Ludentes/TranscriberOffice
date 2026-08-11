@@ -74,3 +74,30 @@ def test_get_torch_dtype_case_insensitive():
     assert get_torch_dtype("Float16") == torch.float16
     assert get_torch_dtype("BFLOAT16") == torch.bfloat16
     assert get_torch_dtype("AUTO") in [torch.float16, torch.bfloat16, torch.float32]
+
+
+def test_storage_and_session_defaults(tmp_path):
+    from app.config import load_config
+
+    config = load_config(tmp_path / "missing.yaml")
+
+    assert config.storage.data_dir == "./data"
+    assert config.session.cookie_name == "transcriber_session"
+    assert config.session.cookie_secure is False
+    assert config.session.cookie_max_age_days == 365
+
+
+def test_load_storage_and_session_config(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "storage:\n  data_dir: /srv/transcriber\n"
+        "session:\n  cookie_secure: true\n  cookie_max_age_days: 30\n"
+    )
+    from app.config import load_config
+
+    config = load_config(config_file)
+
+    assert config.storage.data_dir == "/srv/transcriber"
+    assert config.session.cookie_name == "transcriber_session"
+    assert config.session.cookie_secure is True
+    assert config.session.cookie_max_age_days == 30

@@ -5,10 +5,11 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.config import get_config
 from app.transcribe import get_transcription_service
+from app.transcription_queue import gpu_execution_lock, transcription_queue
 
 
 router = APIRouter(prefix="/api", tags=["transcription"])
@@ -46,13 +47,13 @@ class TranscriptionResponse(BaseModel):
     duration_seconds: float = 0
     speakers_detected: int = 0
     processing_time_seconds: float = 0
-    segments: list[TranscriptionSegment] = []
+    segments: list[TranscriptionSegment] = Field(default_factory=list)
     full_text: str = ""
     error: Optional[str] = None
 
 
 @router.post("/transcribe", response_model=TranscriptionResponse)
-async def transcribe_audio(
+def transcribe_audio(
     file: UploadFile = File(..., description="Audio file to transcribe (MP3)"),
     hotwords: Optional[str] = Form(None, description="Comma-separated hotwords")
 ) -> TranscriptionResponse:
@@ -81,47 +82,49 @@ async def transcribe_audio(
         )
 
     # Read file content and check size
-    content = await file.read()
-    config = get_config()
-    max_size_bytes = config.transcription.max_file_size_mb * 1024 * 1024
-    if len(content) > max_size_bytes:
-        return TranscriptionResponse(
-            success=False,
-            error=f"File too large. Maximum size is {config.transcription.max_file_size_mb}MB"
-        )
+    with transcription_queue.slot():
+        content = file.file.read()
+        config = get_config()
+        max_size_bytes = config.transcription.max_file_size_mb * 1024 * 1024
+        if len(content) > max_size_bytes:
+            return TranscriptionResponse(
+                success=False,
+                error=f"File too large. Maximum size is {config.transcription.max_file_size_mb}MB"
+            )
 
-    # Save uploaded file to temp location
-    tmp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp:
-            tmp.write(content)
-            tmp_path = tmp.name
+        # Save uploaded file to temp location
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp:
+                tmp.write(content)
+                tmp_path = tmp.name
 
-        # Transcribe
-        service = get_transcription_service()
-        result = service.transcribe(
-            audio_path=tmp_path,
-            hotwords=hotwords
-        )
+            # Transcribe
+            service = get_transcription_service()
+            with gpu_execution_lock:
+                result = service.transcribe(
+                    audio_path=tmp_path,
+                    hotwords=hotwords
+                )
 
-        return TranscriptionResponse(
-            success=result.success,
-            duration_seconds=result.duration_seconds,
-            speakers_detected=result.speakers_detected,
-            processing_time_seconds=round(result.processing_time_seconds, 2),
-            segments=[TranscriptionSegment.from_raw(seg) for seg in result.segments],
-            full_text=result.full_text,
-            error=result.error
-        )
+            return TranscriptionResponse(
+                success=result.success,
+                duration_seconds=result.duration_seconds,
+                speakers_detected=result.speakers_detected,
+                processing_time_seconds=round(result.processing_time_seconds, 2),
+                segments=[TranscriptionSegment.from_raw(seg) for seg in result.segments],
+                full_text=result.full_text,
+                error=result.error
+            )
 
-    except Exception as e:
-        return TranscriptionResponse(
-            success=False,
-            error=f"Transcription failed: {str(e)}"
-        )
-    finally:
-        if tmp_path:
-            Path(tmp_path).unlink(missing_ok=True)
+        except Exception as e:
+            return TranscriptionResponse(
+                success=False,
+                error=f"Transcription failed: {str(e)}"
+            )
+        finally:
+            if tmp_path:
+                Path(tmp_path).unlink(missing_ok=True)
 
 
 @router.get("/health")
