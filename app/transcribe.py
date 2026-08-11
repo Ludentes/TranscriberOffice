@@ -1,5 +1,6 @@
 # app/transcribe.py
 """Transcription service using VibeVoice-ASR."""
+import json
 import re
 import time
 import threading
@@ -78,6 +79,83 @@ def format_transcript(segments: list[dict]) -> str:
     return "\n".join(lines)
 
 
+class RepetitionDetector:
+    """Detect when generative ASR output gets stuck in a repetition loop."""
+
+    def __init__(self, min_repeats: int = 10, window_size: int = 500):
+        self.min_repeats = min_repeats
+        self.window_size = window_size
+        self.text = ""
+
+    def add_text(self, new_text: str) -> bool:
+        """Append streamed text and return whether its tail is looping."""
+        self.text += new_text
+        return self.is_looping()
+
+    def is_looping(self) -> bool:
+        """Check repeated substrings and one-to-five-word phrases."""
+        window = self.text[-self.window_size:]
+        if len(window) < self.min_repeats * 2:
+            return False
+
+        # Catch longer exact patterns, including punctuation and spacing.
+        max_pattern_len = min(80, len(window) // self.min_repeats)
+        for pattern_len in range(3, max_pattern_len + 1):
+            pattern = window[-pattern_len:]
+            if pattern * self.min_repeats == window[-pattern_len * self.min_repeats:]:
+                return True
+
+        # Catch short word loops such as "я, я, я" and "ну, поэтому".
+        words = re.findall(r"[\wёЁ]+", window.lower(), flags=re.UNICODE)
+        for phrase_len in range(1, 6):
+            required = phrase_len * self.min_repeats
+            if len(words) < required:
+                continue
+            phrase = words[-phrase_len:]
+            if phrase * self.min_repeats == words[-required:]:
+                return True
+
+        return False
+
+
+def _parse_json_segments(raw_output: str) -> list[dict]:
+    """Parse the JSON transcription format used by current VibeVoice models."""
+    array_start = raw_output.find("[")
+    array_end = raw_output.rfind("]")
+    if array_start < 0 or array_end <= array_start:
+        return []
+
+    try:
+        items = json.loads(raw_output[array_start:array_end + 1])
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+    if not isinstance(items, list):
+        return []
+
+    def as_float(value) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+    segments = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        normalized = {str(key).lower(): value for key, value in item.items()}
+        text = normalized.get("content", normalized.get("text", ""))
+        if not isinstance(text, str):
+            continue
+        segments.append({
+            "speaker_id": normalized.get("speaker", normalized.get("speaker_id", "Unknown")),
+            "start_time": as_float(normalized.get("start", normalized.get("start_time", 0.0))),
+            "end_time": as_float(normalized.get("end", normalized.get("end_time", 0.0))),
+            "text": text,
+        })
+    return segments
+
+
 def parse_model_output(raw_output: str) -> list[dict]:
     """Parse VibeVoice model output into structured segments.
 
@@ -86,7 +164,9 @@ def parse_model_output(raw_output: str) -> list[dict]:
     Or with timestamps:
     <|0.00|> <|speaker_1|> text <|end|>
     """
-    segments = []
+    segments = _parse_json_segments(raw_output)
+    if segments:
+        return segments
 
     # Pattern to match speaker segments with optional timestamps
     # This handles various VibeVoice output formats
@@ -112,15 +192,7 @@ def parse_model_output(raw_output: str) -> list[dict]:
             "text": text.strip()
         })
 
-    # If no pattern matches, try simpler parsing or return raw
-    if not segments and raw_output.strip():
-        segments.append({
-            "speaker": "Speaker 1",
-            "start": 0.0,
-            "end": 0.0,
-            "text": raw_output.strip()
-        })
-
+    # Do not turn malformed/raw model output into a successful transcript.
     return segments
 
 
@@ -566,23 +638,37 @@ class TranscriptionService:
             )
             inputs = {k: v.to(self.input_device) for k, v in inputs.items()}
 
-            # Generate transcription
-            with torch.no_grad():
-                output_ids = self.model.generate(
-                    **inputs,
-                    max_new_tokens=max_new_tokens,
-                    do_sample=False,
-                    temperature=None,
-                    top_p=None,
-                    eos_token_id=self.processor.tokenizer.eos_token_id,
-                    pad_token_id=getattr(self.processor, 'pad_id', self.processor.tokenizer.pad_token_id),
-                )
+            # Generate transcription. Retry only if the model degenerates into
+            # a repetition loop; normal requests still use one greedy pass.
+            generated_text = ""
+            recovery_temperatures = [None, 0.2, 0.3, 0.4]
+            for attempt, temperature in enumerate(recovery_temperatures):
+                with torch.no_grad():
+                    output_ids = self.model.generate(
+                        **inputs,
+                        max_new_tokens=max_new_tokens,
+                        do_sample=attempt > 0,
+                        temperature=temperature,
+                        top_p=0.95 if attempt > 0 else None,
+                        eos_token_id=self.processor.tokenizer.eos_token_id,
+                        pad_token_id=getattr(
+                            self.processor, 'pad_id', self.processor.tokenizer.pad_token_id
+                        ),
+                    )
 
-            # Decode output
-            generated_text = self.processor.decode(
-                output_ids[0],
-                skip_special_tokens=False  # Keep speaker tokens for parsing
-            )
+                generated_text = self.processor.decode(
+                    output_ids[0],
+                    skip_special_tokens=False  # Keep speaker tokens for parsing
+                )
+                detector = RepetitionDetector()
+                if not detector.add_text(generated_text):
+                    break
+                if attempt == len(recovery_temperatures) - 1:
+                    raise RuntimeError(
+                        "Transcription failed: the model entered a repetition loop "
+                        "after 3 recovery attempts"
+                    )
+                print(f"Repetition loop detected. Retrying transcription ({attempt + 1}/3)...")
 
             # Try to use processor's post_process if available
             try:
@@ -594,6 +680,9 @@ class TranscriptionService:
                     segments = parse_model_output(generated_text)
             except (AttributeError, TypeError, ValueError):
                 segments = parse_model_output(generated_text)
+
+            if generated_text.strip() and not segments:
+                raise RuntimeError("Transcription failed: model returned malformed output")
 
             # Get audio duration
             import librosa
@@ -651,7 +740,6 @@ class TranscriptionService:
 
         try:
             import librosa
-            from transformers import TextIteratorStreamer
 
             # Check stop flag before starting
             if _stop_requested(stop_event):
@@ -838,71 +926,102 @@ class TranscriptionService:
         )
         inputs = {k: v.to(self.input_device) for k, v in inputs.items()}
 
-        # Create streamer
-        streamer = TextIteratorStreamer(
-            self.processor.tokenizer,
-            skip_prompt=True,
-            skip_special_tokens=True
-        )
-
-        # Container for result from thread
-        result_container = {"text": "", "error": None}
-
-        class StopOnRequest(StoppingCriteria):
-            def __call__(self, input_ids, scores, **kwargs) -> bool:
-                return _stop_requested(stop_event)
-
-        def generate_thread():
-            try:
-                with torch.inference_mode():
-                    self.model.generate(
-                        **inputs,
-                        max_new_tokens=max_new_tokens,
-                        do_sample=False,
-                        temperature=None,
-                        top_p=None,
-                        eos_token_id=self.processor.tokenizer.eos_token_id,
-                        pad_token_id=getattr(self.processor, 'pad_id', self.processor.tokenizer.pad_token_id),
-                        streamer=streamer,
-                        stopping_criteria=StoppingCriteriaList([StopOnRequest()]),
-                    )
-            except Exception as e:
-                result_container["error"] = str(e)
-                print(f"ERROR in generation thread: {e}")
-                # Unblock the streamer so the main thread doesn't hang forever
-                streamer.text_queue.put(streamer.stop_signal)
-
-        # Start generation in background thread
-        thread = threading.Thread(target=generate_thread)
-        thread.start()
-
-        # Stream output
         generated_text = ""
-        token_count = 0
-        for new_text in streamer:
-            # Check stop flag during generation
-            if _stop_requested(stop_event):
-                msg = "Stopped by user."
-                print(msg)
-                # The queue must not release the GPU slot while generation is
-                # still winding down in the background thread.
-                thread.join()
-                yield msg, TranscriptionResult(
-                    success=False, segments=[], full_text="",
-                    duration_seconds=0, speakers_detected=0, error="Stopped"
+        recovery_temperatures = [None, 0.2, 0.3, 0.4]
+
+        for attempt, temperature in enumerate(recovery_temperatures):
+            streamer = TextIteratorStreamer(
+                self.processor.tokenizer,
+                skip_prompt=True,
+                skip_special_tokens=True
+            )
+            result_container = {"error": None}
+            repetition_event = threading.Event()
+            repetition_detector = RepetitionDetector()
+
+            class StopOnRequestOrRepetition(StoppingCriteria):
+                def __call__(self, input_ids, scores, **kwargs) -> bool:
+                    return _stop_requested(stop_event) or repetition_event.is_set()
+
+            generation_kwargs = {
+                **inputs,
+                "max_new_tokens": max_new_tokens,
+                "do_sample": attempt > 0,
+                "temperature": temperature,
+                "top_p": 0.95 if attempt > 0 else None,
+                "eos_token_id": self.processor.tokenizer.eos_token_id,
+                "pad_token_id": getattr(
+                    self.processor, 'pad_id', self.processor.tokenizer.pad_token_id
+                ),
+                "streamer": streamer,
+                "stopping_criteria": StoppingCriteriaList([StopOnRequestOrRepetition()]),
+            }
+
+            def generate_thread():
+                try:
+                    with torch.inference_mode():
+                        self.model.generate(**generation_kwargs)
+                except Exception as e:
+                    result_container["error"] = str(e)
+                    print(f"ERROR in generation thread: {e}")
+                    # Unblock the streamer so the main thread cannot hang.
+                    streamer.text_queue.put(streamer.stop_signal)
+
+            thread = threading.Thread(target=generate_thread)
+            thread.start()
+
+            attempt_text = ""
+            stream_piece_count = 0
+            for new_text in streamer:
+                if _stop_requested(stop_event):
+                    msg = "Stopped by user."
+                    print(msg)
+                    thread.join()
+                    yield msg, TranscriptionResult(
+                        success=False, segments=[], full_text="",
+                        duration_seconds=0, speakers_detected=0, error="Stopped"
+                    )
+                    return
+
+                attempt_text += new_text
+                stream_piece_count += 1
+                if repetition_detector.add_text(new_text):
+                    repetition_event.set()
+                    continue
+
+                # Once a loop is found, do not expose its remaining buffered text.
+                if repetition_event.is_set():
+                    continue
+
+                elapsed = time.time() - start_time
+                status = (
+                    f"--- Generating ({stream_piece_count} parts, {elapsed:.1f}s) ---\n"
+                    f"{attempt_text}"
                 )
-                return
+                yield status, None
 
-            generated_text += new_text
-            token_count += 1
-            elapsed = time.time() - start_time
-            status = f"--- Generating ({token_count} tokens, {elapsed:.1f}s) ---\n{generated_text}"
-            yield status, None
+            thread.join()
 
-        thread.join()
+            if result_container["error"]:
+                raise RuntimeError(result_container["error"])
 
-        if result_container["error"]:
-            raise Exception(result_container["error"])
+            if repetition_event.is_set():
+                if attempt == len(recovery_temperatures) - 1:
+                    raise RuntimeError(
+                        "Transcription failed: the model entered a repetition loop "
+                        "after 3 recovery attempts"
+                    )
+                retry_number = attempt + 1
+                msg = (
+                    f"Repetition loop detected. Retrying transcription "
+                    f"({retry_number}/3)..."
+                )
+                print(msg)
+                yield msg, None
+                continue
+
+            generated_text = attempt_text
+            break
 
         # Get full output with special tokens for parsing
         full_output = self.processor.decode(
@@ -922,6 +1041,9 @@ class TranscriptionService:
         except (AttributeError, TypeError, ValueError) as e:
             print(f"DEBUG: post_process_transcription failed: {e}, using fallback parser")
             segments = parse_model_output(generated_text)
+
+        if generated_text.strip() and not segments:
+            raise RuntimeError("Transcription failed: model returned malformed output")
 
         # Get audio duration
         duration = librosa.get_duration(path=audio_path)
